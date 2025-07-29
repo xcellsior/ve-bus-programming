@@ -1,4 +1,6 @@
-This script is no longer necessary - please check out https://github.com/j9brown/victron-mk3 as this has a working script for performing all Victron Mk3 functions.
+Please check out https://github.com/j9brown/victron-mk3 as this has a working script for performing many of the inverter's functions.
+
+This repo's example script performs the setting of absorption and float voltage which is a feature not in the above repo.
 
 # ve-bus-programming
 Programming a Victron Inverter with VE.Bus without Venus or GX device. Raspberry Pi and MK3 only.
