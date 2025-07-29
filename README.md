@@ -1,3 +1,5 @@
+This script is no longer necessary - please check out https://github.com/j9brown/victron-mk3 as this has a working script for performing all Victron Mk3 functions.
+
 # ve-bus-programming
 Programming a Victron Inverter with VE.Bus without Venus or GX device. Raspberry Pi and MK3 only.
 
