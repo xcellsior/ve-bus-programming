@@ -23,7 +23,7 @@ Where:
 - FF: Protocol marker
 - 58: 'X' command (not mentioned in documentation)
 - 37: CommandWriteViaID
-- 01: Flags for RAM and EEPROM
+- 01: Flags for RAM and EEPROM (Use 0x03 for RAM only)
 - setting_id: 2 for absorption voltage, 3 for float voltage
 - value: Little endian, scaled by 0.01 (e.g., 5600 = 56.00V)
 
