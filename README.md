@@ -75,6 +75,7 @@ setter.set_voltage(56.0, 2)
 # Set float voltage to 54.0V
 setter.set_voltage(54.0, 3)
 ```
+Please note that this writes to the EEPROM which has limited read/write cycles. This example script is not meant for automations!
 
 ## Debugging Tips
 1. Use a tool like cutecom or Wireshark with USB capture to verify commands
