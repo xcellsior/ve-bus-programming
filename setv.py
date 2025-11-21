@@ -49,7 +49,7 @@ class VoltageSettings:
             0xFF,           # Protocol marker
             0x58,           # 'X' command (ascii)
             0x37,           # CommandWriteViaID
-            0x01,           # Flags (RAM only)
+            0x01,           # Flags (Both EEPROM and RAM to last betweeen power cycles)
             setting_id,     # Setting ID (2=absorption, 3=float)
         ]) + value_bytes
         
