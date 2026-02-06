@@ -1,6 +1,6 @@
 # ve-bus-programming
 
-Programming a Victron Inverter with VE.Bus without Venus or GX device. Raspberry Pi and MK3 only.
+Programming a Victron Inverter with VE.Bus without Venus or GX device. Linux based, only using the MK3 adapter.
 
 Also check out [victron-mk3](https://github.com/j9brown/victron-mk3) — a working library that implements many inverter functions. This repo focuses on the parts that library doesn't cover: direct setting reads/writes, charge profile configuration, and protocol details that Victron's documentation gets wrong.
 
