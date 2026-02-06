@@ -2,6 +2,20 @@ Please check out https://github.com/j9brown/victron-mk3 as this has a working sc
 
 This repo's example script performs the setting of absorption and float voltage which is a feature not in the above repo.
 
+Updated recently. Check out the FINDINGS.md doc for even more reverse engineered settings such as the following:
+
+| Bit | Mask | SET (1) | CLEAR (0) | Confirmed |
+|----:|-----:|:--------|:----------|:---------:|
+| 2 | 0x0004 | _Unknown_ | _Unknown_ | |
+| 3 | 0x0008 | UPS function **disabled** | UPS function **enabled** | ✓ |
+| 4 | 0x0010 | _Unknown_ | _Unknown_ | |
+| 5 | 0x0020 | PowerAssist **enabled** | PowerAssist **disabled** | ✓ |
+| 7 | 0x0080 | _Model-dependent default_ | _Model-dependent default_ | Partial |
+| 8 | 0x0100 | _Unknown_ | _Unknown_ | |
+| 11 | 0x0800 | Adaptive charge (lead-acid) | Fixed charge (LiFePO4) | ✓ |
+| 14 | 0x4000 | Weak AC input **enabled** | Weak AC input **disabled** | ✓ |
+| 15 | 0x8000 | _Unknown (set on both models)_ | _Unknown_ | |
+
 # ve-bus-programming
 Programming a Victron Inverter with VE.Bus without Venus or GX device. Raspberry Pi and MK3 only.
 
