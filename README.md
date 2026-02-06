@@ -1,110 +1,95 @@
-Please check out https://github.com/j9brown/victron-mk3 as this has a working script for performing many of the inverter's functions.
-
-This repo's example script performs the setting of absorption and float voltage which is a feature not in the above repo.
-
-Updated recently. Check out the FINDINGS.md doc for even more reverse engineered settings such as the following:
-
-| Bit | Mask | SET (1) | CLEAR (0) | Confirmed |
-|----:|-----:|:--------|:----------|:---------:|
-| 2 | 0x0004 | _Unknown_ | _Unknown_ | |
-| 3 | 0x0008 | UPS function **disabled** | UPS function **enabled** | ✓ |
-| 4 | 0x0010 | _Unknown_ | _Unknown_ | |
-| 5 | 0x0020 | PowerAssist **enabled** | PowerAssist **disabled** | ✓ |
-| 7 | 0x0080 | _Model-dependent default_ | _Model-dependent default_ | Partial |
-| 8 | 0x0100 | _Unknown_ | _Unknown_ | |
-| 11 | 0x0800 | Adaptive charge (lead-acid) | Fixed charge (LiFePO4) | ✓ |
-| 14 | 0x4000 | Weak AC input **enabled** | Weak AC input **disabled** | ✓ |
-| 15 | 0x8000 | _Unknown (set on both models)_ | _Unknown_ | |
-
 # ve-bus-programming
+
 Programming a Victron Inverter with VE.Bus without Venus or GX device. Raspberry Pi and MK3 only.
 
-# Programming a Victron Inverter with VE.Bus
-This repository aims to add valuable information about VE.Bus that the technical protocol documentation lacks or is incorrect on. Find the documentation from Victron here:
+Also check out [victron-mk3](https://github.com/j9brown/victron-mk3) — a working library that implements many inverter functions. This repo focuses on the parts that library doesn't cover: direct setting reads/writes, charge profile configuration, and protocol details that Victron's documentation gets wrong.
+
+## Documentation
+
+**[FINDINGS.md](FINDINGS.md)** — Comprehensive protocol reference covering the full VE.Bus MK2/MK3 wire protocol, reverse-engineered from USB packet captures and iterative bench testing. Includes:
+
+- Complete frame format, checksum calculation, and command/response reference
+- Setting 0 and Setting 1 flag register bit maps (UPS, PowerAssist, Weak AC, adaptive charge, dynamic current limiter, wide frequency range)
+- Charge profile settings and the exact 8-write sequence VEConfigure uses for LiFePO4
+- Grid code / LOM setting behavior and the residual cleanup problem when reverting to "None"
+- Timing, ACK quirks, cross-model differences (MultiPlus vs. Quattro), and practical gotchas
+- Methodology for mapping unknown settings using sweep-and-diff
+
+Find Victron's official (incomplete) protocol documentation here:
 https://www.victronenergy.com/upload/documents/Technical-Information-Interfacing-with-VE-Bus-products-MK2-Protocol-3-14.pdf
-Within this repo contains tools for directly programming Victron inverters via VE.Bus using the MK3 USB interface. While Victron provides documentation for the VE.Bus protocol, several key details are either incorrect or missing. This guide aims to fill those gaps based on actual reverse engineering and testing.
 
-## Key Findings and Documentation Corrections
+## Tools
 
-### Command Structure
-The documentation suggests using commands 0x33 (CommandWriteSetting) followed by 0x34 (CommandWriteData) for changing settings. However, this does not work. Instead, use CommandWriteViaID (0x37) with the following structure:
+| Script | Purpose |
+|--------|---------|
+| `set_voltage.py` | Set absorption and float voltage (WriteViaID example) |
+| `settings_sweeper.py` | Sweep all 256 setting IDs — dump supported settings to CSV for diffing |
+| `ram_sweeper.py` | Sweep all 256 RAM variable IDs — identify live telemetry values |
+
+The sweeper scripts are the primary tool for mapping unknown settings. Run a sweep, change one parameter in VEConfigure, sweep again, and diff the CSV outputs. See [FINDINGS.md § Methodology for Mapping Unknown Settings](FINDINGS.md#11-methodology-for-mapping-unknown-settings) for details.
+
+## Key Protocol Corrections
+
+Victron's documentation has several errors. The most critical:
+
+**Use CommandWriteViaID (0x37), not CommandWriteSetting (0x33) + CommandWriteData (0x34).** The documented two-step write process does not work. The correct write frame is:
 
 ```
 07 FF 58 37 01 [setting_id] [value_lo] [value_hi] [checksum]
 ```
-Where:
-- 07: Correct length byte (documentation wasn't clear about including all bytes)
-- FF: Protocol marker
-- 58: 'X' command (not mentioned in documentation)
-- 37: CommandWriteViaID
-- 01: Flags for RAM and EEPROM (Use 0x03 for RAM only)
-- setting_id: 2 for absorption voltage, 3 for float voltage
-- value: Little endian, scaled by 0.01 (e.g., 5600 = 56.00V)
 
-### Scaling Factors
-While the documentation mentions various scaling factors, for voltage settings:
-- Multiply desired voltage by 100 to get the internal value
-- For example: 56.0V → 5600 (0x15E0 in little endian)
+- `07` — length byte
+- `FF` — protocol marker
+- `58` — Winmon slot ('X'; any of 0x57–0x5A works)
+- `37` — CommandWriteViaID
+- `01` — flags: RAM + EEPROM (use `0x03` for RAM only)
+- Setting value is little-endian, voltage settings scaled ×100 (e.g., 5600 = 56.00V)
 
-### Setting IDs
-Important setting IDs:
-- 2: Absorption voltage
-- 3: Float voltage
-
-### Common Issues and Solutions
-1. **Command Response**: Many commands won't generate responses. This is normal and differs from what the documentation suggests about waiting for responses.
-
-2. **Byte Order**: All values are little endian, but the documentation isn't clear about where this applies.
-
-3. **MK3 vs MK2**: The documentation primarily focuses on MK2, but MK3 USB behaves differently. Notably:
-   - No need for DTR signal handling
-   - Different timing requirements
-   - Some commands that work with MK2 don't work with MK3
-
-### Working with the Device
-1. Always set the address (04 FF 41 01 00 BB) before sending commands
-2. Use proper delays between commands (100ms minimum recommended)
-3. Baud rate should be 2400 (this part of documentation is correct)
+See [FINDINGS.md § Command Reference](FINDINGS.md#4-command-reference) for the full command set including ReadSetting, GetSettingInfo, ReadRAMVar, and State commands.
 
 ## Required Hardware
-- Victron MultiPlus II Inverter (or compatible)
-- MK3 USB interface
+
+- Victron MultiPlus, Quattro, or compatible VE.Bus inverter/charger
+- MK3-USB interface
 - USB connection to host computer
 
 ## Software Requirements
+
 - Python 3.x
-- pyserial library
+- pyserial
 
 ```bash
 pip install pyserial
 ```
 
-## Usage
-See the included Python script for implementation details. Basic usage:
+## Quick Start
 
 ```python
+# Set absorption and float voltage
+from set_voltage import VoltageSettings
+
 setter = VoltageSettings()
-# Set absorption voltage to 56.0V
-setter.set_voltage(56.0, 2)
-# Set float voltage to 54.0V
-setter.set_voltage(54.0, 3)
+setter.set_voltage(56.0, 2)  # Absorption = 56.00V
+setter.set_voltage(54.0, 3)  # Float = 54.00V
 ```
-Please note that this writes to the EEPROM which has limited read/write cycles. This example script is not meant for automations!
 
-## Debugging Tips
-1. Use a tool like cutecom or Wireshark with USB capture to verify commands
-2. Monitor voltage settings with a multimeter to confirm changes
-3. The device's LED status can be used to verify operation mode
+```bash
+# Discover all settings on your inverter
+python settings_sweeper.py /dev/ttyUSB0 -o baseline.csv
 
-## Known Limitations
-1. Some settings may require specific device states to be changed
-2. Not all settings documented in the manual are accessible
-3. Some changes may require device restart to take effect
+# Discover live RAM variables
+python ram_sweeper.py /dev/ttyUSB0 -o ramvars.csv
+```
 
-## Safety Notes
-- Always verify voltage settings with appropriate tools
-- Incorrect settings can damage batteries
-- Some settings may interact with BMS or other protection systems
+**Note:** Writes go to EEPROM which has limited write cycles. These tools are for configuration and discovery, not automation loops.
+
+## Safety
+
+- Verify voltage settings with a multimeter after writing
+- Incorrect charge parameters can damage batteries
+- Never blindly copy flag register values between different models — base values differ between MultiPlus and Quattro
+- Always use read-modify-write when changing individual bits in flag registers (Settings 0 and 1)
 
 ## Contributing
-This project was developed through reverse engineering and practical testing. If you discover additional protocol details or corrections, please contribute them back to the community.
+
+This project was developed through reverse engineering and practical testing. If you discover additional protocol details, setting ID mappings, or corrections, please contribute them back.
