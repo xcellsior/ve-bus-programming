@@ -301,7 +301,7 @@ Setting 0 is a 16-bit bitmask controlling major inverter features. The base valu
 
 - **Bit 11 (Adaptive Charge)**: Lead-acid batteries use adaptive absorption duration based on bulk charge time. LiFePO4 batteries use fixed-duration absorption. Clearing this bit is part of applying a LiFePO4 charge profile.
 
-- **Bit 14 (Weak AC)**: Relaxes waveform quality requirements for the AC input. Intended for poor-quality grid or generator connections. **Conflicts with PowerAssist** — VEConfigure auto-disables Weak AC when PowerAssist is enabled, because PowerAssist requires tight waveform synchronization. Having both enabled simultaneously is a contradictory state that degrades transfer performance.
+- **Bit 14 (Weak AC)**: Relaxes waveform quality requirements for the AC input. Intended for poor-quality grid or generator connections. In one observed case, having Weak AC enabled on a unit with UPS mode active correlated with degraded AC transfer times (~500ms instead of the expected sub-20ms), though the causal mechanism has not been confirmed by testing. It is possible that Weak AC relaxes the waveform tracking that UPS mode relies on for fast zero-crossing handoff.
 
 - **Bit 7**: Observed to differ between MultiPlus (SET) and Quattro (CLEAR) as a model default. Also changes when a grid code is applied and does not always revert when the grid code is removed. Treat as model-specific; do not blindly copy between different models.
 
@@ -363,20 +363,20 @@ These settings appear when a grid code has been configured and control Loss of M
 
 To clean up residuals, write `0xFFFF` to settings 128 and 191. Setting 190 appears to be read-only or firmware-managed — writes to it are silently ignored, but its residual value (`0xFFF5`) does not appear to cause behavioral problems in practice.
 
-### 7.5 AC Input / Output Settings (Partial)
+### 7.5 Other Settings (Partial)
 
-Settings in the ranges 16–27, 28–39, and 50–59 appear to be per-AC-input parameter blocks (AC-in-1, AC-in-2, generator). Identical values across these ranges for some parameters suggest the same setting repeated for different inputs.
+Settings in the ranges 16–27, 28–39, and 50–59 appear to be parameter blocks that repeat across groups (possibly per-AC-input or per-operating-mode). Identical values across these ranges for some parameters suggest the same setting repeated for different contexts.
 
 | ID | Likely Function | Notes |
 |---:|:----------------|:------|
 | 15 | Unknown toggle | Binary 0/1, differs between otherwise identical units |
-| 16 | AC parameter (block 1) | Paired with 28 and 52 |
-| 17 | AC high limit? | ÷100, often 6400 = 64.00V equivalent |
-| 18 | AC low limit? | ÷100, often 4700 |
+| 16 | Parameter (block 1) | Paired with 28 and 52 |
+| 17 | DC voltage threshold? | ÷100, often 6400 = 64.00V — battery overvoltage disconnect on a 48V system |
+| 18 | DC voltage threshold? | ÷100, often 4700 = 47.00V |
 | 60 | Mode flag / threshold | Changes with grid code (16 → 48); reverts cleanly |
 | 65 | Charge parameter | 190 (0xBE) after LiFePO4 profile |
 | 72 | Charge parameter | 242 (0xF2) after LiFePO4 profile |
-| 73 | Upper limit? | ÷100, varies significantly between configs |
+| 73 | Voltage threshold? | ÷100, varies significantly between configs |
 | 88 | Quattro-only? | Not supported on MultiPlus |
 
 ### 7.6 Applying a LiFePO4 "Fixed" Charge Profile
@@ -571,6 +571,6 @@ python discover_settings.py /dev/inverter -o after.csv
 diff baseline.csv after.csv
 ```
 
-For flag registers (Settings 0 and 1), toggle one on/off switch at a time and diff. Each toggle isolates one bit. Be aware that VEConfigure may silently change related settings — for example, enabling PowerAssist auto-disables Weak AC. Always change one thing at a time and verify nothing else moved unexpectedly.
+For flag registers (Settings 0 and 1), toggle one on/off switch at a time and diff. Each toggle isolates one bit. Be aware that VEConfigure may silently change related settings when you toggle something — always change one thing at a time and verify nothing else moved unexpectedly.
 
 For RAM variables (live telemetry), read each variable multiple times and look for values that change between reads. Static values are configuration state; changing values are live measurements. Cross-reference plausible ranges for your system voltage (e.g., 48V nominal → battery voltage readings in the 4400–5800 range with ÷100 scaling).
