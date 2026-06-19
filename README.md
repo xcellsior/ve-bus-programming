@@ -32,7 +32,7 @@ The sweeper scripts are the primary tool for mapping unknown settings. Run a swe
 
 ## Interactive TUI (`tui/tui.py`)
 
-> ⚠️ **This TUI is vibe coded and should not be used in production without manual
+> ⚠️ **This TUI is vibe++ coded (I mostly paid attention) and should not be used in production without manual
 > verification.** Power systems can be dangerous. It sits on top of a partially
 > reverse-engineered protocol — verify every value (multimeter / VEConfigure)
 > before trusting it, and remember that wrong charge parameters can damage batteries.
