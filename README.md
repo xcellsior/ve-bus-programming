@@ -161,3 +161,7 @@ python ram_sweeper.py /dev/ttyUSB0 -o ramvars.csv
 ## Contributing
 
 This project was developed through reverse engineering and practical testing. If you discover additional protocol details, setting ID mappings, or corrections, please contribute them back.
+
+## License
+
+[MIT](LICENSE) — permissive. You're free to use, modify, and distribute this, including commercially; just keep the copyright and permission notice. The software is provided "as is", with **no warranty and no liability for misuse** — and note this drives real power hardware, so see the safety notes above.
