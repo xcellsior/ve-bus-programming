@@ -44,10 +44,17 @@ All MK2 protocol frames follow this structure:
 
 | Field | Size | Description |
 |-------|------|-------------|
-| Length | 1 byte | Number of bytes following (including 0xFF, payload, and checksum) |
+| Length | 1 byte | Number of payload bytes — counts `0xFF` and the command/data bytes, but **not** the length byte itself and **not** the trailing checksum |
 | Marker | 1 byte | Always `0xFF` |
 | Payload | Variable | Command-specific data |
 | Checksum | 1 byte | `(256 - (sum of all preceding bytes) % 256) % 256` |
+
+> **Length byte gotcha.** The length counts everything between itself and the
+> checksum (i.e. `0xFF` + payload), excluding the checksum. A ReadSetting frame
+> is `04 FF 58 31 <id> <chk>` — the `04` counts `FF 58 31 <id>`, four bytes.
+> A WriteViaID frame is `07 FF 58 37 01 <id> <lo> <hi> <chk>` — `07` counts the
+> seven bytes `FF 58 37 01 <id> <lo> <hi>`. Do **not** include the checksum in
+> the length, or every frame will be rejected.
 
 ### Checksum Calculation
 
@@ -216,6 +223,38 @@ Writes a RAM variable. Used by VEConfigure during the write phase (e.g., `WriteR
 06 FF <slot> 34 <var_id> <value_lo> <value_hi> <checksum>
 ```
 
+### 4.5b GetVariableInfo (0x36) → Response 0x8E / 0x8F
+
+Returns the **scale, sign, and offset** for a RAM variable, so telemetry can be
+decoded exactly instead of guessing divisors. Sent in a Winmon slot ('X'):
+
+**Request frame:**
+```
+05 FF 58 36 <var_id_lo> <var_id_hi> <checksum>
+```
+
+**Response payload (after the slot byte):**
+```
+FF 58 8E <scale_lo> <scale_hi> 8F <offset_lo> <offset_hi>
+```
+
+Decode (matches the `j9brown/victron-mk3` library):
+
+```python
+scale = scale_lo | scale_hi << 8
+signed = False
+if scale >= 0x8000:          # negative ⇒ the quantity is signed
+    scale = 0x10000 - scale
+    signed = True
+if scale >= 0x4000:          # large ⇒ fractional scale
+    scale = 1 / (0x8000 - scale)
+offset = offset_lo | offset_hi << 8         # signed 16-bit
+value = scale * (raw + offset)              # raw sign-extended if `signed`
+```
+
+Confirmed scales on the bench MultiPlus II are in §7.7. Scaling is constant for
+a session, so query once per variable and cache.
+
 ### 4.6 State Command ('S' / 0x53)
 
 Controls the inverter's operating state.
@@ -309,7 +348,7 @@ Setting 0 is a 16-bit bitmask controlling major inverter features. The base valu
 
 | Configuration | Value | Binary |
 |:---|:---|:---|
-| Quattro, UPS on, PA on, fixed charge, WAC off | `0x8134` | `1000 0001 0011 0100` |
+| Quattro **or MultiPlus II**, UPS on, PA on, fixed charge, WAC off | `0x8134` | `1000 0001 0011 0100` |
 | Quattro, UPS on, PA on, fixed charge, WAC on | `0xC134` | `1100 0001 0011 0100` |
 | MultiPlus, UPS off, PA on, fixed charge, WAC off | `0x81BC` | `1000 0001 1011 1100` |
 | MultiPlus, UPS on, PA on, fixed charge, WAC off | `0x81B4` | `1000 0001 1011 0100` |
@@ -374,10 +413,35 @@ Settings in the ranges 16–27, 28–39, and 50–59 appear to be parameter bloc
 | 17 | DC voltage threshold? | ÷100, often 6400 = 64.00V — battery overvoltage disconnect on a 48V system |
 | 18 | DC voltage threshold? | ÷100, often 4700 = 47.00V |
 | 60 | Mode flag / threshold | Changes with grid code (16 → 48); reverts cleanly |
-| 65 | Charge parameter | 190 (0xBE) after LiFePO4 profile |
-| 72 | Charge parameter | 242 (0xF2) after LiFePO4 profile |
+| 64 | Battery capacity | Ah; 0 = battery monitor disabled |
+| 65 | Battery SoC when bulk finished | ×0.5 → %. 190 = 95% after LiFePO4 profile |
+| 72 | Battery charge efficiency | 242 ≈ 95% after LiFePO4 profile |
 | 73 | Voltage threshold? | ÷100, varies significantly between configs |
 | 88 | Quattro-only? | Not supported on MultiPlus |
+
+Additional setting IDs identified from the `victron-vebus-mk3-control` library
+(names; scales partly confirmed on the bench MultiPlus II):
+
+| ID | Name | Notes |
+|---:|:-----|:------|
+| 5 | Inverter output voltage | direct V (120 on the 120 V bench unit) |
+| 6 | AC1 input current limit | ÷10 A — the persistent form of the "shore" limit (matched the runtime 9.9 A) |
+| 7 | Repeated absorption time | |
+| 8 | Repeated absorption interval | |
+| 9 | Maximum absorption time | (set to 1 for the LiFePO4 fixed profile) |
+| 11 | DC input low shutdown | ÷100 V (low-battery cutoff) |
+| 12 | DC input low restart offset | ÷100 V above the shutdown voltage |
+| 48 | Assist current boost factor | |
+| 49 | AC2 input current limit | Quattro-only |
+| 64 | Battery capacity | Ah |
+
+**Note — possible Setting 0 bit 11 discrepancy.** This project reverse-engineered
+Setting 0 bit 11 as adaptive(set)/fixed(clear) charge (§7.1, confirmed by the
+LiFePO4 toggle-and-diff). The `victron-vebus-mk3-control` flag map instead labels
+Flags0 bit 11 "reduced float enabled". These may be firmware/model differences;
+the §7.1 interpretation is the one validated on this hardware and is what the
+tooling uses. Treat the other flag-bit names from that library as unconfirmed
+here until isolated by toggle-and-diff.
 
 ### 7.6 Applying a LiFePO4 "Fixed" Charge Profile
 
@@ -387,12 +451,56 @@ VEConfigure writes these 8 settings when switching to the LiFePO4 fixed charge p
 |------:|-----------:|------:|:--------|
 | 1 | 0 | Clear bit 11 | Disable adaptive charging |
 | 2 | 60 | 16 | Mode flag |
-| 3 | 65 | 190 | Charge parameter |
-| 4 | 72 | 242 | Charge parameter |
+| 3 | 65 | 190 | Battery SoC when bulk finished (×0.5 → 95%) |
+| 4 | 72 | 242 | Battery charge efficiency (≈95%) |
 | 5 | 10 | 1 | Charge characteristic = fixed |
 | 6 | 2 | 5680 | Absorption voltage = 56.80V |
 | 7 | 3 | 5400 | Float voltage = 54.00V |
 | 8 | 9 | 1 | Absorption time parameter |
+
+### 7.7 RAM Variable Map (Live Telemetry)
+
+RAM variables (ReadRAMVar 0x30 → 0x85) hold live measurements. Their scale/sign
+should be read from **GetVariableInfo (0x36)** rather than guessed — see §4.5b.
+IDs and scales below were confirmed on the bench MultiPlus II and cross-checked
+against the `j9brown/victron-mk3` library:
+
+| ID | Quantity | Scale | Signed | Notes |
+|---:|:---------|:------|:------:|:------|
+| 0 | Mains voltage | ×0.01 V | no | |
+| 1 | Mains current | ×0.01 A | yes | |
+| 2 | Inverter voltage | ×0.01 V | no | |
+| 3 | Inverter current | ×0.01 A | no* | *MultiPlus II reports negative values despite the info flagging it unsigned — override to signed |
+| 4 | Battery voltage | ×0.01 V | no | e.g. 5302 → 53.02 V |
+| 5 | Battery current | ×0.1 A | yes | e.g. 0xFFEA → −2.2 A |
+| 6 | Battery ripple voltage | ×0.01 V | no | |
+| 7 | Inverter period | ×0.000512 (+256) | no | frequency = 10 / period Hz |
+| 8 | Mains period | ×0.001024 | no | frequency = 10 / period Hz |
+| 9 | Signed AC load current | ×0.01 A | yes | |
+| 10 | Virtual switch position | — | — | not supported on the bench MultiPlus II |
+| 11 | Ignore AC input | bit 4 | — | boolean (see "bit variables" below) |
+| 12 | Multi-functional relay state | bit 5 | — | boolean |
+| 13 | Battery State of Charge | ×0.005 → ×100 % | no | only meaningful when the battery monitor is on (setting 64 capacity > 0); otherwise reads 100 % |
+| 14 | DC power | ×1 W | yes | negative = discharging |
+| 15 | Mains power | ×1 W | yes | |
+| 16 | Inverter power | ×1 W | yes | |
+
+**Frequency** is derived from the period variables: `f = round(10 / (scale·raw), 2)` Hz.
+
+**Bit (boolean) variables.** When the GetVariableInfo *offset* field is `0x8000`,
+the variable is a single boolean bit at `bit = |scale field| − 1` of the raw
+value (e.g. var 11 scale `0x0005` → bit 4; var 12 scale `0x0006` → bit 5). A scale
+field of `0` means the variable is unsupported.
+
+**Battery SoC** uses a fractional scale that yields a 0–1 value; multiply by 100
+for a percentage.
+
+**Library cross-references.** Two complementary open-source references were used
+to confirm and extend this map; neither covers the persistent setting read/write
+(`0x31`/`0x37`) or charge-profile work that is this project's focus:
+- `j9brown/victron-mk3` — `V`/`F`/`L`/`S`/`H` info frames and `W`/`X`/`Y`/`Z` RAM reads.
+- `victron-vebus-mk3-control` (Home Assistant integration) — identifies RAM
+  variables 6/9/10/11/12/13 (above) and a battery-monitor **setting** map (§7.5).
 
 ---
 
@@ -454,11 +562,22 @@ Do not assume settings or flag values are portable between different Victron mod
 
 | Aspect | MultiPlus | Quattro |
 |:-------|:----------|:--------|
-| Setting 0 base value | `0x81BC` (typical) | `0x8134` (typical) |
-| Setting 0 bit 7 | SET | CLEAR |
+| Setting 0 base value | `0x81BC` (original MultiPlus, typical) | `0x8134` (typical) |
+| Setting 0 bit 7 | SET (original MultiPlus) | CLEAR |
 | Supported setting count | ~79 | ~84 |
 | Settings 49, 88 | Not supported | Supported |
 | Settings 128/190/191 | Only with grid code | Only with grid code |
+
+**Correction — Setting 0 bit 7 and `0x8134` are NOT reliable model discriminators.**
+A **MultiPlus II** was directly observed reading Setting 0 = `0x8134` with **bit 7
+CLEAR** — the same value/flag state this table previously attributed to a Quattro.
+So bit 7 distinguishes (at most) the *original* MultiPlus from the others, not the
+model family in general, and `0x8134` is not Quattro-exclusive.
+
+The reliable way to identify a Quattro is the **Quattro-only settings 49 and 88**:
+present (respond) on a Quattro, absent (no response) on MultiPlus / MultiPlus II.
+Use those for model detection; treat bit 7 as model-specific raw data, not a flag
+to interpret as on/off (it is already marked "do not interpret" in §7.1).
 
 ### Grid Code Password
 

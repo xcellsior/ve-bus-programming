@@ -1,0 +1,3 @@
+# Runtime dependencies for the VE.Bus tools + TUI.
+pyserial>=3.5     # serial comms with the MK3-USB adapter (all scripts)
+textual>=8.0      # terminal UI framework (tui.py only; not needed for scripts/backend)
