@@ -736,9 +736,12 @@ class Backend:
 
     def identify(self) -> DeviceInfo:
         s0 = self.read_setting(0)
-        # 49 and 88 are Quattro-only; either being supported ⇒ Quattro.
+        # Setting 49 (AC2 input current limit) is Quattro-exclusive — MultiPlus
+        # has only AC1, so 49 is absent. Setting 88 (Solar & Wind Priority) is
+        # available on both models; require both for confirmation only.
+        # See FINDINGS §9 for cross-model differences.
         quattro_only = (self.read_setting_supported(88)
-                        or self.read_setting_supported(49))
+                        and self.read_setting_supported(49))
         info = detect_model(s0, quattro_only)
         info.firmware = self.read_version()
         return info
