@@ -412,12 +412,13 @@ Settings in the ranges 16–27, 28–39, and 50–59 appear to be parameter bloc
 | 16 | Parameter (block 1) | Paired with 28 and 52 |
 | 17 | DC voltage threshold? | ÷100, often 6400 = 64.00V — battery overvoltage disconnect on a 48V system |
 | 18 | DC voltage threshold? | ÷100, often 4700 = 47.00V |
-| 60 | Mode flag / threshold | Changes with grid code (16 → 48); reverts cleanly |
+| 49 | AC2 input current limit | Quattro-only (MultiPlus has only AC1) |
+| 60 | Solar & Wind Priority flag | Bitmask: bit 4 = enabled; 16 = off, 528 = on |
 | 64 | Battery capacity | Ah; 0 = battery monitor disabled |
 | 65 | Battery SoC when bulk finished | ×0.5 → %. 190 = 95% after LiFePO4 profile |
 | 72 | Battery charge efficiency | 242 ≈ 95% after LiFePO4 profile |
 | 73 | Voltage threshold? | ÷100, varies significantly between configs |
-| 88 | Quattro-only? | Not supported on MultiPlus |
+| 88 | Solar & Wind Priority voltage | Sustain voltage ×100 (1320 = 13.20 V for LiFePO4) |
 
 Additional setting IDs identified from the `victron-vebus-mk3-control` library
 (names; scales partly confirmed on the bench MultiPlus II):
@@ -574,10 +575,12 @@ CLEAR** — the same value/flag state this table previously attributed to a Quat
 So bit 7 distinguishes (at most) the *original* MultiPlus from the others, not the
 model family in general, and `0x8134` is not Quattro-exclusive.
 
-The reliable way to identify a Quattro is the **Quattro-only settings 49 and 88**:
-present (respond) on a Quattro, absent (no response) on MultiPlus / MultiPlus II.
-Use those for model detection; treat bit 7 as model-specific raw data, not a flag
-to interpret as on/off (it is already marked "do not interpret" in §7.1).
+The reliable way to identify a Quattro is **setting 49** (AC2 input current limit):
+present (responds) on a Quattro, absent (no response) on MultiPlus / MultiPlus II.
+Setting 88 (Solar & Wind Priority sustain voltage) is available on both models —
+use only as confirmation, not as the discriminator. Setting 0 bit 7 is unreliable
+for model detection (a MultiPlus II was observed reading `0x8134` with bit 7 CLEAR).
+Use setting 49 for model detection; treat bit 7 as model-specific raw data.
 
 ### Grid Code Password
 

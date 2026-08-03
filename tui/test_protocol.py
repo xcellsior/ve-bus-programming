@@ -336,6 +336,11 @@ class TestMockBackend(unittest.TestCase):
     def test_identifies_as_multiplus_family(self):
         self.assertEqual(self.b.identify().model, "MultiPlus / MultiPlus II")
 
+    def test_identifies_multiplus_when_only_88_responds(self):
+        # MultiPlus C 12/2000/80: 88=1300, 49=no response → still MultiPlus.
+        self.b.settings[88] = 1300
+        self.assertEqual(self.b.identify().model, "MultiPlus / MultiPlus II")
+
     def test_write_roundtrip(self):
         r = self.b.write_setting(2, 5700)
         self.assertTrue(r.ok)
