@@ -320,17 +320,24 @@ Typical results: 79 supported settings on a MultiPlus, 84 on a Quattro. The IDs 
 
 Setting 0 is a 16-bit bitmask controlling major inverter features. The base value varies by model (MultiPlus vs. Quattro have different defaults for some bits).
 
-| Bit | Mask | SET (1) | CLEAR (0) | Confirmed |
-|----:|-----:|:--------|:----------|:---------:|
-| 2 | 0x0004 | _Unknown_ | _Unknown_ | |
-| 3 | 0x0008 | UPS function **disabled** | UPS function **enabled** | ✓ |
-| 4 | 0x0010 | _Unknown_ | _Unknown_ | |
-| 5 | 0x0020 | PowerAssist **enabled** | PowerAssist **disabled** | ✓ |
-| 7 | 0x0080 | _Model-dependent default_ | _Model-dependent default_ | Partial |
-| 8 | 0x0100 | _Unknown_ | _Unknown_ | |
-| 11 | 0x0800 | Adaptive charge (lead-acid) | Fixed charge (LiFePO4) | ✓ |
-| 14 | 0x4000 | Weak AC input **enabled** | Weak AC input **disabled** | ✓ |
-| 15 | 0x8000 | _Unknown (set on both models)_ | _Unknown_ | |
+| Bit | Mask | Victron name (MK2 Protocol 3.14 §7.3.13.3) | SET (1) | CLEAR (0) | Confirmed |
+|----:|-----:|:--|:--------|:----------|:---------:|
+| 0 | 0x0001 | MultiPhaseSystem | multi-phase system | single phase | |
+| 1 | 0x0002 | MultiPhaseLeader | leader | follower | |
+| 2 | 0x0004 | 60Hz | 60 Hz | 50 Hz | |
+| 3 | 0x0008 | Disable Wave Check (VEConfigure: UPS function) | UPS function **disabled** | UPS function **enabled** | ✓ |
+| 4 | 0x0010 | DoNotStopAfter10HrBulk | | | |
+| 5 | 0x0020 | AssistEnabled | PowerAssist **enabled** | PowerAssist **disabled** | ✓ |
+| 6 | 0x0040 | DisableCharge | | | |
+| 7 | 0x0080 | documented as "must have inverted value of flags[3]" | _Model-dependent default_ | _Model-dependent default_ | Partial |
+| 8 | 0x0100 | DisableAES | | | |
+| 9 | 0x0200 | Not promoted option (do not change) | | | |
+| 10 | 0x0400 | Not promoted option (do not change) | | | |
+| 11 | 0x0800 | EnableReducedFloat | reduced float enabled (adaptive, lead-acid) | disabled (fixed, LiFePO4) | ✓ |
+| 12 | 0x1000 | Not promoted option (do not change) | | | |
+| 13 | 0x2000 | Disable ground relay | | | |
+| 14 | 0x4000 | Weak AC input | Weak AC input **enabled** | Weak AC input **disabled** | ✓ |
+| 15 | 0x8000 | Remote overrules AC2 | _(set on both models)_ | | |
 
 **Important behavioral notes:**
 
@@ -338,7 +345,7 @@ Setting 0 is a 16-bit bitmask controlling major inverter features. The base valu
 
 - **Bit 5 (PowerAssist)**: Supplements AC input with battery power when load exceeds the input current limit. Requires precise waveform tracking.
 
-- **Bit 11 (Adaptive Charge)**: Lead-acid batteries use adaptive absorption duration based on bulk charge time. LiFePO4 batteries use fixed-duration absorption. Clearing this bit is part of applying a LiFePO4 charge profile.
+- **Bit 11 (EnableReducedFloat)**: Victron's name for the bit. Behaviour as observed: lead-acid profiles set it, LiFePO4 profiles clear it, and clearing it is part of applying a LiFePO4 charge profile.
 
 - **Bit 14 (Weak AC)**: Relaxes waveform quality requirements for the AC input. Intended for poor-quality grid or generator connections. In one observed case, having Weak AC enabled on a unit with UPS mode active correlated with degraded AC transfer times (~500ms instead of the expected sub-20ms), though the causal mechanism has not been confirmed by testing. It is possible that Weak AC relaxes the waveform tracking that UPS mode relies on for fast zero-crossing handoff.
 
@@ -358,12 +365,16 @@ Setting 0 is a 16-bit bitmask controlling major inverter features. The base valu
 
 Setting 1 is another 16-bit bitmask for additional features.
 
-| Bit | Mask | SET (1) | CLEAR (0) | Confirmed |
-|----:|-----:|:--------|:----------|:---------:|
-| 11 | 0x0800 | Accept Wide Frequency Range **enabled** | **disabled** | ✓ |
-| 12 | 0x1000 | Dynamic Current Limiter **enabled** | **disabled** | ✓ |
+| Bit | Mask | Victron name (MK2 Protocol 3.14 §7.3.13.3) | SET (1) | Confirmed |
+|----:|-----:|:--|:--------|:---------:|
+| 0–10 | | Virtual Switch relay-mode flags: vsonBulkProtection, vsonTemperaturePreAlarm, vsonLowBatteryPreAlarm, vsonOverloadPreAlarm, vsonUBatRipplePreAlarm, vsoffTemperaturePreAlarm, vsoffLowBatteryPreAlarm, vsoffOverloadPreAlarm, vsoffUBatRipplePreAlarm, vsonWhenGeneralFailure, vsInvert | | |
+| 11 | 0x0800 | Accept wide input frequency | **enabled** | ✓ |
+| 12 | 0x1000 | Dynamic current limiter | **enabled** | ✓ |
+| 13 | 0x2000 | Use tubular plate traction battery curve | | |
+| 14 | 0x4000 | Remote overrules AC1 | | |
+| 15 | 0x8000 | Use Low Power Shutdown in AES instead of modified sinewave | | |
 
-The remaining bits in Setting 1 have not been individually isolated. Full mapping requires the same toggle-and-diff methodology used for Setting 0.
+Names for the bits not isolated here come from Victron's document; only the ✓ rows were confirmed by toggle-and-diff on this hardware.
 
 ### 7.3 Charge Profile Settings
 
@@ -436,13 +447,7 @@ Additional setting IDs identified from the `victron-vebus-mk3-control` library
 | 49 | AC2 input current limit | Quattro-only |
 | 64 | Battery capacity | Ah |
 
-**Note — possible Setting 0 bit 11 discrepancy.** This project reverse-engineered
-Setting 0 bit 11 as adaptive(set)/fixed(clear) charge (§7.1, confirmed by the
-LiFePO4 toggle-and-diff). The `victron-vebus-mk3-control` flag map instead labels
-Flags0 bit 11 "reduced float enabled". These may be firmware/model differences;
-the §7.1 interpretation is the one validated on this hardware and is what the
-tooling uses. Treat the other flag-bit names from that library as unconfirmed
-here until isolated by toggle-and-diff.
+**Note on Setting 0 bit 11.** Victron's public document "Interfacing with VE.Bus products - MK2 Protocol 3.14" (section 7.3.13.3, https://www.victronenergy.com/upload/documents/Technical-Information-Interfacing-with-VE-Bus-products-MK2-Protocol-3-14.pdf) names Setting 0 bit 11 `EnableReducedFloat`. The §7.1 toggle-and-diff stands (VEConfigure clears it for the LiFePO4 profile); the `victron-vebus-mk3-control` label and this project's observation describe the same bit. The same section names all bits of Settings 0 and 1 (reproduced in §7.1 and §7.2) and, in 7.3.13.2, settings 0 through 65.
 
 ### 7.6 Applying a LiFePO4 "Fixed" Charge Profile
 
