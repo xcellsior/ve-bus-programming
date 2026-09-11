@@ -4,6 +4,7 @@
 > verification.** Power systems can be dangerous. It sits on top of a partially
 > reverse-engineered protocol — verify every value (multimeter / VEConfigure)
 > before trusting it, and remember that wrong charge parameters can damage batteries.
+> Update 2026-09-11: I have tested many of the functions of the TUI and they behave as expected.
 
 A reactive terminal dashboard ([Textual](https://textual.textualize.io/)) that exposes the
 reverse-engineered features in one place:
