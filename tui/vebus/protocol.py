@@ -182,7 +182,7 @@ SETTING_META: dict[int, SettingMeta] = {
     51: SettingMeta("AES current hysteresis", 1.0, "", "int"),
     60: SettingMeta("Flags register 2", kind="flags"),
     61: SettingMeta("Flags register 3", kind="flags"),
-    63: SettingMeta("Low DC alarm level", 100.0, "V", "volts"),
+    63: SettingMeta("Low battery pre-alarm offset (+0x8000)", 1.0, "", "int"),
     64: SettingMeta("Battery capacity", 1.0, "Ah", "int"),
     65: SettingMeta("Battery SoC when bulk finished", 2.0, "%", "volts"),
     72: SettingMeta("Battery charge efficiency", 1.0, "", "int"),
@@ -225,7 +225,7 @@ SETTING_NAMES: dict[int, str] = {
     54: "VS2 on lower DC voltage than", 55: "VS2 on low DC voltage for",
     56: "VS2 off load lower than", 57: "VS2 off load lower for",
     58: "VS2 off DC voltage high", 59: "VS2 off DC voltage for",
-    60: "flags2", 61: "flags3", 62: "System period", 63: "Low DC alarm level",
+    60: "flags2", 61: "flags3", 62: "System period", 63: "Low battery pre-alarm offset",
     64: "Battery capacity", 65: "SoC when bulk finished",
     66: "Frequency shift Ubat start", 67: "Frequency shift start delay",
     68: "Frequency shift Ubat stop", 69: "Frequency shift stop delay",
@@ -280,8 +280,8 @@ class FlagBit:
         return 1 << self.bit
 
 
-# Bit names come from VictronConnect's flag table (FINDINGS §12.3), where flag
-# N is bit N % 16 of flags register N // 16. confirmed = toggled on the bench.
+# Bit names from Victron's MK2 Protocol 3.14 §7.3.13.3 and VictronConnect's flag
+# table (FINDINGS §7.1, §12.3). confirmed = toggled on the bench.
 BIT_REDUCED_FLOAT = 11   # Setting 0
 BIT_LITHIUM = 4          # Setting 60 (flags2)
 
@@ -295,8 +295,9 @@ SETTING0_BITS: list[FlagBit] = [
     FlagBit(4, "Don't stop after 10 h bulk", "set", "clear", confirmed=False),
     FlagBit(5, "PowerAssist", "enabled", "disabled"),
     FlagBit(6, "Charger disabled", "set", "clear", confirmed=False),
-    FlagBit(7, "Disable back-feed lock on large currents", "set", "clear",
-            confirmed=False),
+    # The PDF calls bit 7 the inverse of bit 3; VictronConnect, back-feed lock.
+    FlagBit(7, "Bit 7 (sources disagree)", "set", "clear",
+            confirmed=False, interpret=False),
     FlagBit(8, "Disable AES", "set", "clear", confirmed=False),
     FlagBit(9, "Reserved (\"don't change me\")", "set", "clear",
             confirmed=False, interpret=False),

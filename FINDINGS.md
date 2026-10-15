@@ -423,26 +423,28 @@ The PDF defines ReadSetting with a 16-bit ID. VictronConnect's name table covers
 
 Setting 0 is a 16-bit bitmask controlling major inverter features. The base value varies by model (MultiPlus vs. Quattro have different defaults for some bits).
 
-Names come from VictronConnect's flag table (§12.3). ✓ = isolated on the bench by toggle-and-diff; the rest are VictronConnect's names, not yet toggled here.
+Names: Victron's PDF (MK2 Protocol 3.14 §7.3.13.3) and VictronConnect's flag table (§12.3) agree on every bit except bit 7. ✓ = isolated on the bench by toggle-and-diff.
 
-| Bit | Mask | Meaning when SET | Bench |
-|----:|-----:|:-----------------|:-----:|
-| 0 | 0x0001 | Multi-phase system | |
-| 1 | 0x0002 | Multi-phase leader | |
-| 2 | 0x0004 | 60 Hz (clear = 50 Hz) | |
-| 3 | 0x0008 | Disable wave check = UPS function **disabled** | ✓ |
-| 4 | 0x0010 | Don't stop after 10 h bulk | |
-| 5 | 0x0020 | PowerAssist **enabled** | ✓ |
-| 6 | 0x0040 | Charger disabled | |
-| 7 | 0x0080 | Disable back-feed lock on large currents | |
-| 8 | 0x0100 | Disable AES | |
-| 9 | 0x0200 | _Reserved_ — VictronConnect labels it "don't change me!" | |
-| 10 | 0x0400 | _Reserved_ — "don't change me!" | |
-| 11 | 0x0800 | **Reduced float (storage mode) enabled** | |
-| 12 | 0x1000 | _Reserved_ — "don't change me!" | |
-| 13 | 0x2000 | Disable ground relay | |
-| 14 | 0x4000 | Weak AC input **enabled** | ✓ |
-| 15 | 0x8000 | Remote overrules AC2 | |
+| Bit | Mask | Victron name (PDF §7.3.13.3) | Meaning when SET | Bench |
+|----:|-----:|:--|:--|:--:|
+| 0 | 0x0001 | MultiPhaseSystem | multi-phase system (clear = single phase) | |
+| 1 | 0x0002 | MultiPhaseLeader | phase leader (clear = follower) | |
+| 2 | 0x0004 | 60Hz | 60 Hz (clear = 50 Hz) | |
+| 3 | 0x0008 | Disable Wave Check (VEConfigure: UPS function) | UPS function **disabled** | ✓ |
+| 4 | 0x0010 | DoNotStopAfter10HrBulk | don't stop after 10 h bulk | |
+| 5 | 0x0020 | AssistEnabled | PowerAssist **enabled** | ✓ |
+| 6 | 0x0040 | DisableCharge | charger disabled | |
+| 7 | 0x0080 | PDF: "must have inverted value of flags[3]". VictronConnect: "disable back feed lock on large currents" | _sources disagree; see note_ | Partial |
+| 8 | 0x0100 | DisableAES | AES disabled | |
+| 9 | 0x0200 | Not promoted option | do not change | |
+| 10 | 0x0400 | Not promoted option | do not change | |
+| 11 | 0x0800 | EnableReducedFloat | **reduced float (storage mode) enabled** | Partial |
+| 12 | 0x1000 | Not promoted option | do not change | |
+| 13 | 0x2000 | Disable ground relay | ground relay disabled | |
+| 14 | 0x4000 | Weak AC input | Weak AC input **enabled** | ✓ |
+| 15 | 0x8000 | Remote overrules AC2 | remote overrules AC2 _(set on both models)_ | |
+
+Bit 11 is "Partial" because the bench saw it cleared by the LiFePO4 profile, not toggled on its own.
 
 **Important behavioral notes:**
 
@@ -450,13 +452,20 @@ Names come from VictronConnect's flag table (§12.3). ✓ = isolated on the benc
 
 - **Bit 5 (PowerAssist)**: Supplements AC input with battery power when load exceeds the input current limit. Requires precise waveform tracking.
 
-- **Bit 11 (Reduced float / storage mode)**. **Corrected:** this doc called bit 11 adaptive (set) vs. fixed (clear) charge. VictronConnect names it "enable reduced float", matching the `victron-vebus-mk3-control` library. Adaptive vs. fixed lives in **setting 10** (charge characteristic). VEConfigure's LiFePO4 template turns storage mode off and sets setting 10 to fixed in the same pass, which is why the diff pointed at bit 11.
+- **Bit 11 (EnableReducedFloat)**: reduced float, which VEConfigure calls storage mode. As observed, lead-acid profiles set it and LiFePO4 profiles clear it, and clearing it is part of applying a LiFePO4 charge profile. **Corrected:** this doc once read the bit as adaptive (set) vs. fixed (clear) charge. Adaptive vs. fixed lives in **setting 10** (charge characteristic). VEConfigure's LiFePO4 template turns storage mode off and sets setting 10 to fixed in the same pass, which is why the diff pointed at bit 11.
 
 - **Bit 14 (Weak AC)**: Relaxes waveform quality requirements for the AC input. Intended for poor-quality grid or generator connections. In one observed case, having Weak AC enabled on a unit with UPS mode active correlated with degraded AC transfer times (~500ms instead of the expected sub-20ms), though the causal mechanism has not been confirmed by testing. It is possible that Weak AC relaxes the waveform tracking that UPS mode relies on for fast zero-crossing handoff.
 
 - **Bit 7**: Observed to differ between MultiPlus (SET) and Quattro (CLEAR) as a model default. Also changes when a grid code is applied and does not always revert when the grid code is removed. Treat as model-specific; do not blindly copy between different models.
-  - VictronConnect names it "disable back-feed lock on large currents".
-  - `victron-vebus-mk3-control` treats it as an inverted copy of bit 3. The `0x81BC`/`0x81B4` pair below contradicts that library: bit 3 flips while bit 7 stays set.
+  - The PDF says bit 7 "must have inverted value of flags[3]" and tells you to keep it consistent with bit 3. `victron-vebus-mk3-control` implements that rule.
+  - VictronConnect, which is newer than the PDF, names it "disable back feed lock on large currents".
+  - The bench values don't follow the PDF's rule. It holds in `0x81B4` and `0xC194`, but not in `0x8134`, `0xC134` or `0x81BC`. Toggling UPS in VEConfigure (`0x81BC` ↔ `0x81B4`) changed bit 3 alone.
+  - So follow VEConfigure: change bit 3 and leave bit 7 as the unit has it. The TUI does this.
+
+- **The PDF's warnings for flag registers**:
+  - Don't change unused flags or the "not promoted options" (bits 9, 10, 12); changing those "can damage the device".
+  - Don't set bits for settings the unit doesn't support. `GetSettingInfo`'s maximum is the mask of supported bits (§4.3).
+  - A flag change takes effect after the unit is reset (off/on).
 
 - **Bits 0, 1 and 2** describe the system itself (multi-phase membership, mains frequency). Never toggle them from a script.
 
@@ -474,28 +483,28 @@ With the full map, `0x8134` reads as: 60 Hz, don't stop after 10 h bulk, PowerAs
 
 ### 7.2 Setting 1 — Secondary Flags Register
 
-Setting 1 is another 16-bit bitmask for additional features. It holds VictronConnect's flags 16–31 (bit N = flag 16 + N, §12.3).
+Setting 1 is another 16-bit bitmask for additional features. It holds flags 16–31 (bit N = flag 16 + N; PDF §7.3.13.3, §12.3).
 
-| Bit | Mask | Meaning when SET | Bench |
-|----:|-----:|:-----------------|:-----:|
-| 0 | 0x0001 | VS on bulk protection | |
-| 1 | 0x0002 | VS on temperature warning | |
-| 2 | 0x0004 | VS on battery warning | |
-| 3 | 0x0008 | VS on overload warning | |
-| 4 | 0x0010 | VS on ripple warning | |
-| 5 | 0x0020 | VS off temperature warning | |
-| 6 | 0x0040 | VS off battery warning | |
-| 7 | 0x0080 | VS off overload warning | |
-| 8 | 0x0100 | VS off ripple warning | |
-| 9 | 0x0200 | VS on when failure present | |
-| 10 | 0x0400 | Invert VS behaviour | |
-| 11 | 0x0800 | Accept Wide Frequency Range **enabled** | ✓ |
-| 12 | 0x1000 | Dynamic Current Limiter **enabled** | ✓ |
-| 13 | 0x2000 | Tubular plate traction curve | |
-| 14 | 0x4000 | Remote overrules AC1 | |
-| 15 | 0x8000 | Low power shutdown in AES | |
+| Bit | Mask | Victron name (PDF §7.3.13.3, §7.3.13.5) | Meaning when SET | Bench |
+|----:|-----:|:--|:--|:--:|
+| 0 | 0x0001 | vsonBulkProtection | Virtual Switch on: bulk protection | |
+| 1 | 0x0002 | vsonTemperaturePreAlarm | VS on: temperature pre-alarm | |
+| 2 | 0x0004 | vsonLowBatteryPreAlarm | VS on: low battery pre-alarm | |
+| 3 | 0x0008 | vsonOverloadPreAlarm | VS on: overload pre-alarm | |
+| 4 | 0x0010 | vsonUBatRipplePreAlarm | VS on: battery ripple pre-alarm | |
+| 5 | 0x0020 | vsoffTemperaturePreAlarm | VS off: temperature pre-alarm | |
+| 6 | 0x0040 | vsoffLowBatteryPreAlarm | VS off: low battery pre-alarm | |
+| 7 | 0x0080 | vsoffOverloadPreAlarm | VS off: overload pre-alarm | |
+| 8 | 0x0100 | vsoffUBatRipplePreAlarm | VS off: battery ripple pre-alarm | |
+| 9 | 0x0200 | vsonWhenGeneralFailure | VS on when a failure is present | |
+| 10 | 0x0400 | vsInvert | invert the Virtual Switch | |
+| 11 | 0x0800 | Accept wide input frequency | wide input frequency **enabled** | ✓ |
+| 12 | 0x1000 | Dynamic current limiter | dynamic current limiter **enabled** | ✓ |
+| 13 | 0x2000 | Use tubular plate traction battery curve | tubular plate traction curve | |
+| 14 | 0x4000 | Remote overrules AC1 | remote overrules AC1 | |
+| 15 | 0x8000 | Use Low Power Shutdown in AES instead of modified sinewave | low power shutdown in AES | |
 
-The two bench-confirmed bits are exactly VictronConnect's flags 27 and 28. That match is the evidence the numbering in §12.3 applies to these registers. "VS" is the Virtual Switch (the programmable relay).
+Names for the bits not isolated here come from Victron's PDF; VictronConnect uses the same names (§12.3). Only the ✓ rows were confirmed by toggle-and-diff on this hardware. Those two bits are flags 27 and 28, which matches the PDF's numbering ("Flags[0] is bit 0 in Flags0, Flags[31] is bit 15 in Flags1"). "VS" is the Virtual Switch, the programmable relay.
 
 ### 7.3 Charge Profile Settings
 
@@ -541,7 +550,7 @@ Settings 128, 190 and 191 are not in VictronConnect's settings table, so their n
 
 Settings in the ranges 16–27, 28–39, and 50–59 appear to be parameter blocks that repeat across groups (possibly per-AC-input or per-operating-mode). Identical values across these ranges for some parameters suggest the same setting repeated for different contexts.
 
-**Corrected:** VictronConnect's settings table (§12.2) explains these blocks. 15–43 configure the first Virtual Switch, 44–47 the AC low/high switch inputs, and 52–59 the second Virtual Switch (VS2). 16, 28 and 52 are "load higher/lower than" thresholds, which is why they pair up. These settings only act when the Virtual Switch is in use.
+**Corrected:** the PDF (§7.3.13.2, §7.3.13.4) and VictronConnect's settings table (§12.2) explain these blocks. 15–43 configure the first Virtual Switch, 44–47 the lowest/highest acceptable mains voltage and their hysteresis, and 52–59 the second Virtual Switch (VS2). 16, 28 and 52 are "load higher/lower than" thresholds, which is why they pair up. These settings only act when the Virtual Switch is in use.
 
 | ID | Function (VictronConnect name) | Notes |
 |---:|:-------------------------------|:------|
@@ -552,7 +561,7 @@ Settings in the ranges 16–27, 28–39, and 50–59 appear to be parameter bloc
 | 49 | Second input current limit (AC2) | Quattro-only (MultiPlus has only AC1) |
 | 60 | **flags2** (flag register) | **Corrected:** bit 4 = lithium battery, bit 9 = prefer renewable energy (Solar & Wind priority). 16 = lithium only; 528 = lithium + Solar & Wind. See §12.3. |
 | 61 | flags3 | Flag register; all bits spare in VictronConnect's table |
-| 63 | Low DC alarm level | ÷100 V |
+| 63 | Low battery pre-alarm offset (VictronConnect: low DC alarm level) | Per the PDF, an offset added to settings 11 + 12, stored with `0x8000` added because settings are unsigned |
 | 64 | Battery capacity | Ah; 0 = battery monitor disabled |
 | 65 | Battery SoC when bulk finished | ×0.5 → %. 190 = 95% after LiFePO4 profile |
 | 72 | Battery charge efficiency | 242 ≈ 95% after LiFePO4 profile |
@@ -575,7 +584,11 @@ Additional setting IDs identified from the `victron-vebus-mk3-control` library
 | 49 | AC2 input current limit | Quattro-only |
 | 64 | Battery capacity | Ah |
 
-**Resolved — Setting 0 bit 11.** This project once read bit 11 as adaptive (set) vs. fixed (clear) charge, from the LiFePO4 diff. The `victron-vebus-mk3-control` library labels it "reduced float enabled", and VictronConnect's own flag table agrees with the library (§7.1, §12.3). The other flag names that library uses for bits 5, 8, 13, 14 and Setting 1 bits 11–12 also match VictronConnect. Its bit-7 label does not (§7.1).
+**Resolved — Setting 0 bit 11.** Victron's public document "Interfacing with VE.Bus products - MK2 Protocol 3.14" (section 7.3.13.3, https://www.victronenergy.com/upload/documents/Technical-Information-Interfacing-with-VE-Bus-products-MK2-Protocol-3-14.pdf) names Setting 0 bit 11 `EnableReducedFloat`. VictronConnect's flag table and the `victron-vebus-mk3-control` library agree.
+
+The §7.1 toggle-and-diff stands: VEConfigure clears the bit for the LiFePO4 profile. The bit controls reduced float (storage mode), though, not adaptive vs. fixed charging (§7.1).
+
+The same PDF section names all bits of Settings 0 and 1 (§7.1, §7.2). Section 7.3.13.2 names settings 0 through 65, and §12.2 extends the list to 88 from VictronConnect.
 
 ### 7.6 Applying a LiFePO4 "Fixed" Charge Profile
 
@@ -901,7 +914,7 @@ MK3-level commands it uses:
 
 ### 12.2 Settings 0–88 by name
 
-The PDF names 0–49. This table extends it, and agrees with the PDF wherever both name an ID. A name here doesn't mean a given unit supports the setting.
+The PDF names 0–65 (§7.3.13.2, Virtual Switch IDs in §7.3.13.4). This table extends that to 88, and agrees with the PDF wherever both name an ID. A name here doesn't mean a given unit supports the setting.
 
 | ID | Name | ID | Name |
 |---:|:-----|---:|:-----|
@@ -953,7 +966,7 @@ The PDF names 0–49. This table extends it, and agrees with the PDF wherever bo
 
 ### 12.3 Flag numbering
 
-VictronConnect names 64 flags; flag N is bit `N % 16` of register `N // 16`. The settings table names the registers: flags0 = setting 0, flags1 = setting 1, flags2 = setting 60, flags3 = setting 61.
+Flag N is bit `N % 16` of register `N // 16`. The PDF (§7.3.13.3) documents that numbering and names settings 60 and 61 Flags2 and Flags3, and VictronConnect agrees: flags0 = setting 0, flags1 = setting 1, flags2 = setting 60, flags3 = setting 61. The PDF names flags up to 34 and calls 35–63 unused; VictronConnect names flags up to 41.
 
 Four bench results line up with this numbering:
 - Setting 0 bits 5 and 14
@@ -964,9 +977,9 @@ Settings 0 and 1 are tabled in §7.1 and §7.2. flags2 (setting 60):
 
 | Bit | Flag | Meaning when SET |
 |----:|-----:|:-----------------|
-| 0 | 32 | VS2 off when AC1 available |
-| 1 | 33 | Invert VS2 behaviour |
-| 2 | 34 | Frequency changes by VS |
+| 0 | 32 | VS2 off when AC1 available (PDF: vs2offWhenAC1Available) |
+| 1 | 33 | Invert VS2 behaviour (PDF: vs2Invert) |
+| 2 | 34 | Frequency changes by VS (PDF: vsSetInverterPeriodTime) |
 | 3 | 35 | Frequency changes by Ubat |
 | 4 | 36 | Lithium battery |
 | 5 | 37 | Allow enable feed-in |

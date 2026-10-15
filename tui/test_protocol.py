@@ -81,9 +81,9 @@ class TestDecoders(unittest.TestCase):
         self.assertEqual([f.bit for f in p.decode_setting0(0)], list(range(16)))
         self.assertEqual([f.bit for f in p.decode_setting1(0)], list(range(16)))
 
-    def test_setting0_reserved_bits_not_interpreted(self):
+    def test_setting0_reserved_and_disputed_bits_not_interpreted(self):
         for f in p.decode_setting0(0x8134):
-            self.assertEqual(f.interpret, f.bit not in (9, 10, 12))
+            self.assertEqual(f.interpret, f.bit not in (7, 9, 10, 12))
 
     def test_only_bench_toggled_bits_confirmed(self):
         s0 = {f.bit for f in p.decode_setting0(0) if f.confirmed}
