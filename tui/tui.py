@@ -94,8 +94,8 @@ class ConfirmSequence(ModalScreen[Optional[str]]):
         with Vertical(id="dialog-wide"):
             yield Label("⚠  Apply LiFePO4 fixed charge profile", id="dialog-title")
             yield Static(
-                "This writes the following settings IN ORDER (Setting 0 first, "
-                "read-modify-write to disable adaptive charging):",
+                "This writes the following settings IN ORDER (Settings 0 and 60 "
+                "are flag registers, changed read-modify-write):",
                 id="dialog-body")
             table = DataTable(id="seq-table", zebra_stripes=True)
             table.add_columns("#", "Setting", "New value", "What it does")
@@ -191,9 +191,9 @@ class VEBusTUI(App):
                              "explicit commands, not auto-polled)", id="state-note")
                 with Horizontal(classes="actions"):
                     yield Button("Off", id="state-off", variant="default")
-                    yield Button("On (invert)", id="state-on", variant="default")
+                    yield Button("Inverter only", id="state-inverter", variant="default")
                     yield Button("Charger only", id="state-charger", variant="default")
-                    yield Button("Normal (auto)", id="state-normal", variant="default")
+                    yield Button("On", id="state-on", variant="default")
 
             with TabPane("Flags", id="tab-flags"):
                 yield Static("Setting 0 — primary flags", classes="panel-title")
@@ -203,7 +203,7 @@ class VEBusTUI(App):
                     yield Button("Toggle UPS", id="tog-ups")
                     yield Button("Toggle PowerAssist", id="tog-pa")
                     yield Button("Toggle Weak AC", id="tog-wac")
-                    yield Button("Toggle charge mode", id="tog-charge")
+                    yield Button("Toggle reduced float", id="tog-charge")
                 yield Static("Setting 1 — secondary flags", classes="panel-title")
                 yield Static("", id="s1-raw", classes="raw-word")
                 yield DataTable(id="s1-table", zebra_stripes=True)
@@ -565,22 +565,22 @@ class VEBusTUI(App):
     @on(Button.Pressed, "#state-off")
     @work
     async def state_off(self) -> None:
-        await self._confirm_state(0x00)
+        await self._confirm_state(p.SWITCH_OFF)
 
-    @on(Button.Pressed, "#state-on")
+    @on(Button.Pressed, "#state-inverter")
     @work
-    async def state_on(self) -> None:
-        await self._confirm_state(0x01)
+    async def state_inverter(self) -> None:
+        await self._confirm_state(p.SWITCH_INVERTER_ONLY)
 
     @on(Button.Pressed, "#state-charger")
     @work
     async def state_charger(self) -> None:
-        await self._confirm_state(0x02)
+        await self._confirm_state(p.SWITCH_CHARGER_ONLY)
 
-    @on(Button.Pressed, "#state-normal")
+    @on(Button.Pressed, "#state-on")
     @work
-    async def state_normal(self) -> None:
-        await self._confirm_state(0x03)
+    async def state_on(self) -> None:
+        await self._confirm_state(p.SWITCH_ON)
 
     @on(Button.Pressed, "#set-shore")
     @work
@@ -613,8 +613,12 @@ class VEBusTUI(App):
                          f"This changes inverter operation immediately."))
         if not ok:
             return
-        await asyncio.to_thread(self.backend.set_state, state)
-        self.notify(f"Operating state command sent: {name}", timeout=6)
+        sent = await asyncio.to_thread(self.backend.set_state, state)
+        if sent:
+            self.notify(f"Operating state command sent: {name}", timeout=6)
+        else:
+            self.notify("State not sent: the current input limit could not be read "
+                        "(it rides in the same frame).", severity="error", timeout=8)
 
     # LiFePO4 sequence --------------------------------------------------------
 
@@ -639,11 +643,14 @@ class VEBusTUI(App):
                 self.notify(vr.message, severity="error", timeout=8)
                 return
         s0 = self.settings.get(0)
-        if s0 is None or s0 == p.UNSUPPORTED:
-            self.notify("Setting 0 unavailable — refresh first.", severity="error")
-            return
+        s60 = self.settings.get(60)
+        for sid, val in ((0, s0), (60, s60)):
+            if val is None or val == p.UNSUPPORTED:
+                self.notify(f"Setting {sid} unavailable — refresh first.",
+                            severity="error")
+                return
         steps = p.build_lifepo4_sequence(s0, p.raw_to_volts(abs_raw),
-                                         p.raw_to_volts(flt_raw), cur)
+                                         p.raw_to_volts(flt_raw), cur, s60)
         choice = await self.push_screen_wait(ConfirmSequence(steps))
         if choice is None:
             self.notify("LiFePO4 sequence cancelled.", severity="information")

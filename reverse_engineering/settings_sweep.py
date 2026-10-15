@@ -16,16 +16,23 @@ import sys
 import time
 from typing import Optional, Tuple
 
-# Known setting names from our reverse engineering
+# Setting names (FINDINGS §12.2 has all IDs 0-88)
 KNOWN_SETTINGS = {
-    0:  "Flags/AdaptiveCharge",
+    0:  "Flags0",
+    1:  "Flags1",
     2:  "UBatAbsorption",
     3:  "UBatFloat",
-    9:  "AbsorpTime/ChargeParam",
+    4:  "ChargeCurrent",
+    9:  "MaxAbsorptionTime",
     10: "ChargeCharacteristic",
-    60: "Unknown60",
-    65: "Unknown65",
-    72: "Unknown72",
+    11: "InverterDcShutdownVoltage",
+    60: "Flags2",
+    61: "Flags3",
+    64: "BatteryCapacity",
+    65: "SocWhenBulkFinished",
+    72: "ChargeEfficiency",
+    81: "GridCode",
+    88: "DoNotChargeVoltage",
 }
 
 WINMON_SLOT = 0x58
@@ -90,8 +97,9 @@ def read_setting(ser: serial.Serial, setting_id: int) -> Optional[int]:
 
 def get_setting_info(ser: serial.Serial, setting_id: int) -> Optional[bytes]:
     """
-    Send GetSettingInfo (0x3C) and return the raw response payload.
-    Response subcmd is 0x89.
+    Send GetSettingInfo and return the raw response payload (subcmd 0x89).
+    The spec and VictronConnect use 0x35 <id lo> <id hi>; this sends the 0x3C
+    seen in a VEConfigure capture, which is unverified (FINDINGS §4.3).
     """
     frame = bytes([0x04, 0xFF, WINMON_SLOT, 0x3C, setting_id])
     frame += bytes([calculate_checksum(frame)])

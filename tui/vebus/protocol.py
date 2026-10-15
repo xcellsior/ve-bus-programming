@@ -34,18 +34,25 @@ except Exception:  # pragma: no cover - serial only needed for the real backend
 # Wire protocol primitives
 # ─────────────────────────────────────────────────────────────────────────────
 
-WINMON_SLOT = 0x58  # 'X' — any of 0x57..0x5A works; keep consistent.
+WINMON_SLOT = 0x58  # 'X'. Replies echo the letter; X/Y/Z rotate to match them (FINDINGS §2).
 VALID_SLOTS = (0x57, 0x58, 0x59, 0x5A)
 
 # Command / response subcommand bytes.
 CMD_READ_SETTING = 0x31
 RSP_READ_SETTING = 0x86
+RSP_SETTING_UNSUPPORTED = 0x91
 CMD_WRITE_VIA_ID = 0x37
-RSP_WRITE_VIA_ID = 0x88
+RSP_WRITE_VIA_ID = 0x88      # setting written
+RSP_WRITE_RAMVAR = 0x87      # RAM variable written
+RSP_NOT_SUPPORTED = 0x80     # command or argument not recognised
+RSP_ACCESS_LEVEL = 0x9B      # write refused: access level required
+# The spec and VictronConnect use 0x35; 0x3C came from a VEConfigure capture
+# and is unverified (FINDINGS §4.3, §13).
 CMD_GET_INFO = 0x3C
 RSP_GET_INFO = 0x89
 CMD_READ_RAMVAR = 0x30
 RSP_READ_RAMVAR = 0x85
+RSP_RAMVAR_UNSUPPORTED = 0x90
 CMD_GET_RAMVAR_INFO = 0x36   # X-slot: 05 FF 58 36 <id_lo> <id_hi> <chk>
 RSP_RAMVAR_INFO_SCALE = 0x8E
 RSP_RAMVAR_INFO_OFFSET = 0x8F
@@ -62,11 +69,13 @@ SWITCH_INVERTER_ONLY = 2
 SWITCH_ON = 3
 SWITCH_OFF = 4
 
-# WriteViaID flag byte.
-FLAG_RAM_EEPROM = 0x01  # persist to RAM + EEPROM (wears EEPROM)
-FLAG_RAM_ONLY = 0x03    # RAM only — lost on power cycle, no EEPROM wear
+# WriteViaID flag byte: bit 0 = setting (1) or RAM var (0); bit 1 = RAM only.
+FLAG_RAM_EEPROM = 0x01  # setting, RAM + EEPROM (wears EEPROM)
+FLAG_RAM_ONLY = 0x03    # setting, RAM only — lost on power cycle, no EEPROM wear
 
-UNSUPPORTED = 0xFFFF  # ReadSetting value meaning "not applicable on this config"
+# A ReadSetting value seen for settings that exist but don't apply to this
+# config. A setting the firmware lacks answers 0x91 instead (FINDINGS §9).
+UNSUPPORTED = 0xFFFF
 
 
 def calculate_checksum(data: bytes) -> int:
@@ -163,29 +172,77 @@ SETTING_META: dict[int, SettingMeta] = {
                           2: "Fixed + storage"}),
     11: SettingMeta("DC input low shutdown (cutoff)", 100.0, "V", "volts"),
     12: SettingMeta("DC input low restart offset", 100.0, "V", "volts"),
-    15: SettingMeta("Unknown toggle 15", 1.0, "", "int"),
-    16: SettingMeta("Parameter block 16", 1.0, "", "int"),
-    17: SettingMeta("DC threshold 17?", 100.0, "V", "volts"),
-    18: SettingMeta("DC threshold 18?", 100.0, "V", "volts"),
+    15: SettingMeta("Virtual switch usage", 1.0, "", "int"),
+    16: SettingMeta("VS on load higher than", 1.0, "", "int"),
+    17: SettingMeta("VS on when Udc lower than", 100.0, "V", "volts"),
+    18: SettingMeta("VS on when Udc higher than", 100.0, "V", "volts"),
     48: SettingMeta("Assist current boost factor", 1.0, "", "int"),
     49: SettingMeta("AC2 input current limit (Quattro)", 10.0, "A", "amps"),
     50: SettingMeta("AES low current limit", 1.0, "", "int"),
     51: SettingMeta("AES current hysteresis", 1.0, "", "int"),
-    60: SettingMeta("Mode flag 60", 1.0, "", "int"),
-    63: SettingMeta("DC input low pre-alarm offset", 100.0, "V", "volts"),
+    60: SettingMeta("Flags register 2", kind="flags"),
+    61: SettingMeta("Flags register 3", kind="flags"),
+    63: SettingMeta("Low DC alarm level", 100.0, "V", "volts"),
     64: SettingMeta("Battery capacity", 1.0, "Ah", "int"),
     65: SettingMeta("Battery SoC when bulk finished", 2.0, "%", "volts"),
     72: SettingMeta("Battery charge efficiency", 1.0, "", "int"),
-    73: SettingMeta("Voltage threshold 73?", 100.0, "V", "volts"),
-    81: SettingMeta("Grid code active", 1.0, "", "int"),
+    73: SettingMeta("Inverter current limit during assist", 1.0, "", "int"),
+    81: SettingMeta("Grid code", 1.0, "", "int"),
+    88: SettingMeta("Do-not-charge voltage (Solar & Wind)", 100.0, "V", "volts"),
     128: SettingMeta("LOM config A", 1.0, "", "int"),
     190: SettingMeta("LOM config B", 1.0, "", "int"),
     191: SettingMeta("LOM config C", 1.0, "", "int"),
 }
 
+# Setting names by ID, as VictronConnect's VE.Bus driver lists them (FINDINGS
+# §12.2). Used for IDs SETTING_META has no scale for; the values stay raw.
+SETTING_NAMES: dict[int, str] = {
+    0: "flags0", 1: "flags1", 2: "Absorption voltage", 3: "Float voltage",
+    4: "Charge current", 5: "Inverter output voltage", 6: "AC current limit",
+    7: "Repeated absorption time", 8: "Repeated absorption interval",
+    9: "Maximum absorption time", 10: "Charge characteristics",
+    11: "Inverter DC shutdown voltage", 12: "Inverter DC restart voltage",
+    13: "Number of slaves", 14: "Special three phase", 15: "Virtual switch usage",
+    16: "VS on load higher than", 17: "VS on when Udc lower than",
+    18: "VS on when Udc higher than", 19: "VS time on load high",
+    20: "VS time on DC voltage high", 21: "VS time on DC voltage low",
+    22: "VS time on when not charging", 23: "VS time on fan enabled",
+    24: "VS time on temperature alarm", 25: "VS time on low battery alarm",
+    26: "VS time on overload alarm", 27: "VS time on ripple alarm",
+    28: "VS off load lower than", 29: "VS off when Udc lower than",
+    30: "VS off when Udc higher than", 31: "VS time off load low",
+    32: "VS time off DC voltage high", 33: "VS time off DC voltage low",
+    34: "VS off when charging for", 35: "VS time off fan disabled",
+    36: "VS off bulk finished for", 37: "VS off no ON condition for",
+    38: "VS off when no AC input for", 39: "VS off no temperature alarm",
+    40: "VS off no battery alarm", 41: "VS off no overload alarm",
+    42: "VS off no ripple alarm", 43: "VS minimum on time",
+    44: "AC low switch input off", 45: "AC low switch input on",
+    46: "AC high switch input off", 47: "AC high switch input on",
+    48: "Assist current boost factor", 49: "Second input current limit",
+    50: "Load for starting AES mode", 51: "Offset for ending AES mode",
+    52: "VS2 on load higher than", 53: "VS2 time on load high",
+    54: "VS2 on lower DC voltage than", 55: "VS2 on low DC voltage for",
+    56: "VS2 off load lower than", 57: "VS2 off load lower for",
+    58: "VS2 off DC voltage high", 59: "VS2 off DC voltage for",
+    60: "flags2", 61: "flags3", 62: "System period", 63: "Low DC alarm level",
+    64: "Battery capacity", 65: "SoC when bulk finished",
+    66: "Frequency shift Ubat start", 67: "Frequency shift start delay",
+    68: "Frequency shift Ubat stop", 69: "Frequency shift stop delay",
+    70: "VS2 on SoC level", 71: "Assistant temp compensation",
+    72: "Charge efficiency", 73: "Inverter current limit during assist",
+    74: "SoC reset value when switching from absorption to float",
+    75: "Battery current for stop absorption", 81: "Grid code",
+    82: "Permanent flags 0", 83: "SoC low shutdown", 84: "SoC low restart",
+    85: "Info ID 0", 86: "Stop charging at temperature",
+    87: "Temperature compensation slope", 88: "Do-not-charge voltage",
+}
+
 
 def setting_meta(setting_id: int) -> SettingMeta:
-    return SETTING_META.get(setting_id, SettingMeta(f"Setting {setting_id}"))
+    if setting_id in SETTING_META:
+        return SETTING_META[setting_id]
+    return SettingMeta(SETTING_NAMES.get(setting_id, f"Setting {setting_id}"))
 
 
 def format_setting_value(setting_id: int, value: Optional[int]) -> str:
@@ -223,22 +280,70 @@ class FlagBit:
         return 1 << self.bit
 
 
-# Setting 0 — primary flags register.
+# Bit names come from VictronConnect's flag table (FINDINGS §12.3), where flag
+# N is bit N % 16 of flags register N // 16. confirmed = toggled on the bench.
+BIT_REDUCED_FLOAT = 11   # Setting 0
+BIT_LITHIUM = 4          # Setting 60 (flags2)
+
+# Setting 0 — flags0.
 SETTING0_BITS: list[FlagBit] = [
-    FlagBit(3, "UPS function", "UPS disabled", "UPS enabled (fast transfer)"),
+    FlagBit(0, "Multi-phase system", "set", "clear", confirmed=False),
+    FlagBit(1, "Multi-phase leader", "set", "clear", confirmed=False),
+    FlagBit(2, "60 Hz", "60 Hz", "50 Hz", confirmed=False),
+    FlagBit(3, "UPS function", "UPS disabled (wave check off)",
+            "UPS enabled (fast transfer)"),
+    FlagBit(4, "Don't stop after 10 h bulk", "set", "clear", confirmed=False),
     FlagBit(5, "PowerAssist", "enabled", "disabled"),
-    FlagBit(11, "Charge mode", "Adaptive (lead-acid)", "Fixed (LiFePO4)"),
+    FlagBit(6, "Charger disabled", "set", "clear", confirmed=False),
+    FlagBit(7, "Disable back-feed lock on large currents", "set", "clear",
+            confirmed=False),
+    FlagBit(8, "Disable AES", "set", "clear", confirmed=False),
+    FlagBit(9, "Reserved (\"don't change me\")", "set", "clear",
+            confirmed=False, interpret=False),
+    FlagBit(10, "Reserved (\"don't change me\")", "set", "clear",
+            confirmed=False, interpret=False),
+    FlagBit(BIT_REDUCED_FLOAT, "Reduced float (storage mode)", "enabled", "disabled",
+            confirmed=False),
+    FlagBit(12, "Reserved (\"don't change me\")", "set", "clear",
+            confirmed=False, interpret=False),
+    FlagBit(13, "Disable ground relay", "set", "clear", confirmed=False),
     FlagBit(14, "Weak AC input", "enabled", "disabled"),
-    FlagBit(7, "Bit 7 (model default)", "set", "clear",
-            confirmed=False, interpret=False),
-    FlagBit(15, "Bit 15 (unknown)", "set", "clear",
-            confirmed=False, interpret=False),
+    FlagBit(15, "Remote overrules AC2", "set", "clear", confirmed=False),
 ]
 
-# Setting 1 — secondary flags register.
+# Setting 1 — flags1 (flags 16–31).
 SETTING1_BITS: list[FlagBit] = [
+    FlagBit(0, "VS on bulk protection", "set", "clear", confirmed=False),
+    FlagBit(1, "VS on temperature warning", "set", "clear", confirmed=False),
+    FlagBit(2, "VS on battery warning", "set", "clear", confirmed=False),
+    FlagBit(3, "VS on overload warning", "set", "clear", confirmed=False),
+    FlagBit(4, "VS on ripple warning", "set", "clear", confirmed=False),
+    FlagBit(5, "VS off temperature warning", "set", "clear", confirmed=False),
+    FlagBit(6, "VS off battery warning", "set", "clear", confirmed=False),
+    FlagBit(7, "VS off overload warning", "set", "clear", confirmed=False),
+    FlagBit(8, "VS off ripple warning", "set", "clear", confirmed=False),
+    FlagBit(9, "VS on when failure present", "set", "clear", confirmed=False),
+    FlagBit(10, "Invert VS behaviour", "set", "clear", confirmed=False),
     FlagBit(11, "Accept Wide Frequency Range", "enabled", "disabled"),
     FlagBit(12, "Dynamic Current Limiter", "enabled", "disabled"),
+    FlagBit(13, "Tubular plate traction curve", "set", "clear", confirmed=False),
+    FlagBit(14, "Remote overrules AC1", "set", "clear", confirmed=False),
+    FlagBit(15, "Low power shutdown in AES", "set", "clear", confirmed=False),
+]
+
+# Setting 60 — flags2 (flags 32–41; 42 and up are spare).
+SETTING60_BITS: list[FlagBit] = [
+    FlagBit(0, "VS2 off when AC1 available", "set", "clear", confirmed=False),
+    FlagBit(1, "Invert VS2 behaviour", "set", "clear", confirmed=False),
+    FlagBit(2, "Frequency changes by VS", "set", "clear", confirmed=False),
+    FlagBit(3, "Frequency changes by Ubat", "set", "clear", confirmed=False),
+    FlagBit(BIT_LITHIUM, "Lithium battery", "set", "clear", confirmed=False),
+    FlagBit(5, "Allow enable feed-in", "set", "clear", confirmed=False),
+    FlagBit(6, "External mains current sensor", "set", "clear", confirmed=False),
+    FlagBit(7, "Configured for VE.Bus BMS", "set", "clear", confirmed=False),
+    FlagBit(8, "Disable Ubat VSense (diagnostics)", "set", "clear", confirmed=False),
+    FlagBit(9, "Prefer renewable energy (Solar & Wind)", "set", "clear",
+            confirmed=False),
 ]
 
 
@@ -270,15 +375,20 @@ def decode_setting1(value: int) -> list[DecodedFlag]:
     return decode_flags(value, SETTING1_BITS)
 
 
+def decode_setting60(value: int) -> list[DecodedFlag]:
+    return decode_flags(value, SETTING60_BITS)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Operating state
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Switch states the 'S' command accepts (MK2 protocol §5); there is no state 0.
 STATE_NAMES = {
-    0x00: "Off",
-    0x01: "On (inverting)",
-    0x02: "Charger only",
-    0x03: "Normal (auto)",
+    SWITCH_CHARGER_ONLY: "Charger only",
+    SWITCH_INVERTER_ONLY: "Inverter only",
+    SWITCH_ON: "On",
+    SWITCH_OFF: "Off",
 }
 
 
@@ -351,7 +461,8 @@ def period_to_frequency(period: float) -> float:
 
 # Variables reported by GetVariableInfo are the authoritative scale/sign source;
 # this table only adds a human label, unit, and the period→frequency handling.
-# IDs/units confirmed on live hardware and cross-checked with j9brown/victron-mk3.
+# Labels follow VictronConnect's RAM variable names (FINDINGS §12.4): 16 is the
+# AC-out (load) power, which includes pass-through from shore, not inverter power.
 @dataclass
 class TelemetryVar:
     var_id: int
@@ -363,18 +474,18 @@ class TelemetryVar:
 TELEMETRY: list[TelemetryVar] = [
     TelemetryVar(4, "Battery voltage", "V"),
     TelemetryVar(5, "Battery current", "A"),
-    TelemetryVar(14, "DC power", "W"),
+    TelemetryVar(14, "Inverter/charger power", "W"),
     TelemetryVar(6, "Battery ripple", "V"),
     TelemetryVar(0, "Mains voltage", "V"),
     TelemetryVar(1, "Mains current", "A"),
-    TelemetryVar(15, "Mains power", "W"),
+    TelemetryVar(15, "AC input power", "W"),
     TelemetryVar(8, "Mains frequency", "Hz", "period"),
-    TelemetryVar(2, "Inverter voltage", "V"),
-    TelemetryVar(3, "Inverter current", "A"),
-    TelemetryVar(16, "Inverter power", "W"),
-    TelemetryVar(7, "Inverter frequency", "Hz", "period"),
+    TelemetryVar(2, "AC output voltage", "V"),
+    TelemetryVar(3, "AC output current", "A"),
+    TelemetryVar(16, "AC output power", "W"),
+    TelemetryVar(7, "AC output frequency", "Hz", "period"),
     TelemetryVar(13, "Battery SoC", "%", "soc"),
-    TelemetryVar(9, "AC load current", "A"),
+    TelemetryVar(9, "AC output current (signed)", "A"),
     TelemetryVar(10, "Virtual switch", ""),
     TelemetryVar(11, "Ignore AC input", "", "bit"),
     TelemetryVar(12, "Multi-func relay", "", "bit"),
@@ -601,28 +712,34 @@ class WriteStep:
 def build_lifepo4_sequence(current_setting0: int,
                            absorption_v: float,
                            float_v: float,
-                           charge_a: Optional[int]) -> list[WriteStep]:
+                           charge_a: Optional[int],
+                           current_setting60: int) -> list[WriteStep]:
     """
-    Build the exact ordered write sequence VEConfigure uses for the LiFePO4
-    fixed charge profile (FINDINGS §7.6). Setting 0 is read-modify-write:
-    bit 11 (adaptive charge) is cleared from the *current* value first.
+    Build the ordered write sequence VEConfigure uses for the LiFePO4 fixed
+    charge profile (FINDINGS §7.6). Settings 0 and 60 are flag registers, so
+    both are read-modify-write from their *current* values: Setting 0 clears
+    bit 11 (reduced float / storage mode) and Setting 60 sets bit 4 (lithium
+    battery). VEConfigure's capture wrote 60 = 16 outright, which would also
+    clear "configured for VE.Bus BMS" and the other flags2 bits.
 
     Charge current is appended as setting 4 when provided.
     """
-    new_setting0 = current_setting0 & ~SETTING0_BITS[2].mask  # clear bit 11
+    new_setting0 = current_setting0 & ~(1 << BIT_REDUCED_FLOAT)
+    new_setting60 = current_setting60 | (1 << BIT_LITHIUM)
     steps = [
         WriteStep(0, new_setting0,
-                  "Disable adaptive charging (clear Setting 0 bit 11)",
+                  "Disable reduced float / storage mode (clear Setting 0 bit 11)",
                   note=f"read-modify-write: 0x{current_setting0:04X} → 0x{new_setting0:04X}"),
-        WriteStep(60, 16, "Mode flag (Setting 60 = 16)"),
-        WriteStep(65, 190, "Charge parameter (Setting 65 = 190)"),
-        WriteStep(72, 242, "Charge parameter (Setting 72 = 242)"),
+        WriteStep(60, new_setting60, "Lithium battery flag (set Setting 60 bit 4)",
+                  note=f"read-modify-write: 0x{current_setting60:04X} → 0x{new_setting60:04X}"),
+        WriteStep(65, 190, "SoC when bulk finished = 95% (Setting 65 = 190)"),
+        WriteStep(72, 242, "Charge efficiency (Setting 72 = 242)"),
         WriteStep(10, 1, "Charge characteristic = Fixed (Setting 10 = 1)"),
         WriteStep(2, volts_to_raw(absorption_v),
                   f"Absorption voltage = {absorption_v:.2f}V (Setting 2)"),
         WriteStep(3, volts_to_raw(float_v),
                   f"Float voltage = {float_v:.2f}V (Setting 3)"),
-        WriteStep(9, 1, "Absorption time parameter (Setting 9 = 1)"),
+        WriteStep(9, 1, "Maximum absorption time (Setting 9 = 1)"),
     ]
     if charge_a is not None:
         steps.append(WriteStep(4, int(charge_a),
@@ -726,6 +843,8 @@ class Backend:
         raise NotImplementedError
 
     def set_state(self, state: int) -> bool:
+        """Send a switch state (STATE_NAMES), keeping the current input limit.
+        False if the state is invalid or the limit can't be read first."""
         raise NotImplementedError
 
     # ── convenience helpers shared by both backends ────────────────────────
@@ -737,7 +856,7 @@ class Backend:
     def identify(self) -> DeviceInfo:
         s0 = self.read_setting(0)
         # Setting 49 (AC2 input current limit) is Quattro-exclusive — MultiPlus
-        # has only AC1, so 49 is absent. Setting 88 (Solar & Wind Priority) is
+        # has only AC1, so 49 is absent. Setting 88 (do-not-charge voltage) is
         # available on both models; require both for confirmation only.
         # See FINDINGS §9 for cross-model differences.
         quattro_only = (self.read_setting_supported(88)
@@ -811,9 +930,9 @@ class SerialBackend(Backend):
 
         If a previous program was interrupted mid-frame (a Ctrl-C'd script,
         VEConfigure, a killed process), the MK3 can stop responding entirely —
-        it goes silent, no Version heartbeats. Flushing buffers and sending the
-        5×0x55 sync sequence (FINDINGS §3) before the address-set realigns
-        framing and brings it back. Caller must hold self._lock.
+        it goes silent, no Version heartbeats. Flushing buffers and sending
+        5×0x55 before the address-set brings it back (FINDINGS §3; VictronConnect
+        sends 0x55 runs as the MK3's autobaud string). Caller must hold self._lock.
         """
         if self.ser is None:
             return
@@ -822,9 +941,10 @@ class SerialBackend(Backend):
             self.ser.reset_output_buffer()
         except Exception:
             pass
-        self.ser.write(bytes([0x55] * 5))   # sync / framing realignment
+        self.ser.write(bytes([0x55] * 5))   # MK3 autobaud string
         time.sleep(0.05)
-        self.ser.write(bytes([0x04, 0xFF, 0x41, 0x01, 0x00, 0xBB]))  # address set
+        # 'A' <action 1 = set> <address 0>: selects device address 0.
+        self.ser.write(bytes([0x04, 0xFF, 0x41, 0x01, 0x00, 0xBB]))
         time.sleep(0.2)
         try:
             if self.ser.in_waiting:
@@ -1007,6 +1127,16 @@ class SerialBackend(Backend):
                 time.sleep(0.05)
         return None
 
+    def _send_state(self, state: int, deciamps: int) -> None:
+        """Long-form 'S': state, input limit in A×10 (flags bit 7), as
+        VictronConnect and victron_mk3 send it. Never send a limit of 0: it
+        means invert-only or bypass, depending on PowerAssist (FINDINGS §4.6)."""
+        frame = build_frame(bytes([0xFF, CMD_STATE, state,
+                                   deciamps & 0xFF, (deciamps >> 8) & 0xFF, 0x01, 0x80]))
+        with self._lock:
+            self.ser.write(frame)
+            time.sleep(self.WRITE_SLEEP)
+
     def set_current_limit(self, amps: float, verify: bool = True) -> WriteResult:
         """
         Set the AC input (shore) current limit via the long-form 'S' command,
@@ -1018,12 +1148,9 @@ class SerialBackend(Backend):
             return WriteResult(False, False, None, "No config response — cannot set limit.")
         amps = max(cfg.min_current, min(amps, cfg.max_current))
         value = max(0, min(int(round(amps * 10)), 0x7FFF))
-        ss = cfg.switch_state_code
-        frame = build_frame(bytes([0xFF, CMD_STATE, ss,
-                                   value & 0xFF, (value >> 8) & 0xFF, 0x01, 0x80]))
-        with self._lock:
-            self.ser.write(frame)
-            time.sleep(self.WRITE_SLEEP)
+        if value <= 0:
+            return WriteResult(False, False, None, "Refusing a 0 A limit (special value).")
+        self._send_state(cfg.switch_state_code, value)
         readback = None
         ok = not verify
         if verify:
@@ -1039,7 +1166,8 @@ class SerialBackend(Backend):
     def read_version(self) -> Optional[int]:
         """
         Parse an unsolicited Version frame: 07 FF 56 <ver[4 LE]> <mode> <chk>.
-        These arrive ~every 100ms, so grab a ~300ms window and scan it.
+        <mode> is the selected device address, or 'B' before one is set.
+        Grab a short window and scan it (FINDINGS §5 on how often they arrive).
         """
         assert self.ser is not None
         with self._lock:
@@ -1063,17 +1191,21 @@ class SerialBackend(Backend):
             bytes([0xFF, WINMON_SLOT, CMD_WRITE_VIA_ID, flag, setting_id, lo, hi]))
 
         acked = False
+        refusal = ""
         with self._lock:
             resp = self._send(frame)
             time.sleep(self.WRITE_SLEEP)
             if resp:
-                f = find_response(resp, RSP_WRITE_VIA_ID)
-                if f and len(f) >= 5 and f[4] == 0x00:
-                    acked = True
+                # The two bytes after 0x88 are don't-care (spec §7.3.11).
+                acked = find_response(resp, RSP_WRITE_VIA_ID) is not None
+                if find_response(resp, RSP_ACCESS_LEVEL):
+                    refusal = " Device refused: access level required (0x9B)."
+                elif find_response(resp, RSP_NOT_SUPPORTED):
+                    refusal = " Device refused: not supported (0x80)."
 
         readback = None
         if verify:
-            # High IDs frequently omit the ACK even on success — readback rules.
+            # Readback is authoritative: some writes return no 0x88 at all.
             readback = self.read_setting(setting_id)
 
         ok = (readback == value) if verify else acked
@@ -1081,15 +1213,21 @@ class SerialBackend(Backend):
             if ok:
                 msg = "Readback confirmed." + ("" if acked else " (no ACK, but value took)")
             else:
-                msg = f"Readback mismatch: wrote {value}, read {readback}."
+                msg = f"Readback mismatch: wrote {value}, read {readback}." + refusal
         else:
-            msg = "ACK received." if acked else "No ACK (unverified)."
+            msg = ("ACK received." if acked else "No ACK (unverified).") + refusal
         return WriteResult(ok=ok, acked=acked, readback=readback, message=msg)
 
     def set_state(self, state: int) -> bool:
-        frame = build_frame(bytes([0xFF, CMD_STATE, state]))
-        with self._lock:
-            self._send(frame)
+        if state not in STATE_NAMES:
+            return False
+        cfg = self.read_config()
+        if cfg is None:
+            return False
+        limit = int(round(cfg.actual_current * 10))
+        if limit <= 0:
+            return False
+        self._send_state(state, limit)
         return True
 
     def resync(self) -> None:
@@ -1205,7 +1343,18 @@ class MockBackend(Backend):
         msg = "Readback confirmed (mock)." if ok else "Mock mismatch."
         return WriteResult(ok=ok, acked=acked, readback=readback, message=msg)
 
+    _STATE_SWITCHES = {
+        SWITCH_CHARGER_ONLY: SW_CHARGE,
+        SWITCH_INVERTER_ONLY: SW_INVERT,
+        SWITCH_ON: SW_CHARGE | SW_INVERT,
+        SWITCH_OFF: 0,
+    }
+
     def set_state(self, state: int) -> bool:
+        if state not in self._STATE_SWITCHES:
+            return False
+        keep = self._switch_register & ~(SW_CHARGE | SW_INVERT)
+        self._switch_register = keep | self._STATE_SWITCHES[state]
         return True
 
     def read_config(self) -> Optional[ConfigInfo]:
