@@ -34,7 +34,7 @@ class VoltageSettings:
         voltage: target voltage (e.g., 56.0 for 56.0V)
         setting_id: 2 for absorption, 3 for float
         """
-        # First set address
+        # Select device address 0 ('A' <action 1 = set> <address>)
         addr_cmd = bytes([0x04, 0xFF, 0x41, 0x01, 0x00, 0xBB])
         self._send_command(addr_cmd)
         time.sleep(0.1)

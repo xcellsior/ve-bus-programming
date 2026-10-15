@@ -10,14 +10,15 @@ A reactive terminal dashboard ([Textual](https://textual.textualize.io/)) that e
 reverse-engineered features in one place:
 
 - **Dashboard** — live telemetry (battery V/I, AC, inverter) on an auto-refresh, plus
-  explicit operating-state controls (Off / On / Charger-only / Normal).
-- **Flags** — Setting 0 and Setting 1 decoded bit-by-bit (UPS, PowerAssist, Weak AC,
-  adaptive vs. fixed charge, Wide Frequency Range, Dynamic Current Limiter) with the raw
-  word shown; model-dependent/unknown bits are displayed but not interpreted. One-click
-  read-modify-write toggles for the confirmed flags.
+  explicit operating-state controls (Off / Inverter only / Charger only / On), sent with
+  the current input limit.
+- **Flags** — Setting 0 and Setting 1 decoded bit-by-bit with the raw word shown. Bit names
+  come from VictronConnect (FINDINGS §12.3); bits not yet toggled on the bench are marked
+  unconfirmed, and the reserved bits are shown raw. One-click read-modify-write toggles for
+  UPS, PowerAssist, Weak AC, reduced float, Wide Frequency Range and Dynamic Current Limiter.
 - **Charge** — absorption / float / charge-current / low-battery-cutoff values, individual
   editing, and a one-button **LiFePO4 fixed-profile** wizard that previews and applies the
-  exact 8-write VEConfigure sequence in order.
+  8-write VEConfigure sequence in order (Settings 0 and 60 read-modify-write).
 - **Grid / LOM** — settings 81/128/190/191 with the grid-code residual situation explained
   and a guarded residual-cleanup action.
 - **All settings** — every supported setting ID, raw + decoded.

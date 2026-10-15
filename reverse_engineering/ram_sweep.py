@@ -167,7 +167,7 @@ def main():
         print(f"ERROR: Could not open {port}: {e}")
         sys.exit(1)
 
-    # Set address
+    # Select device address 0 ('A' <action 1 = set> <address>)
     addr_cmd = bytes([0x04, 0xFF, 0x41, 0x01, 0x00, 0xBB])
     send_command(ser, addr_cmd)
     time.sleep(0.1)

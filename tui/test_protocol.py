@@ -66,21 +66,47 @@ class TestChecksumAndFraming(unittest.TestCase):
 
 
 class TestDecoders(unittest.TestCase):
-    def test_setting0_lifepo4_fixed_charge(self):
-        # 0x8134: UPS on (bit3 clear), PA on (bit5 set), fixed charge (bit11 clear).
-        flags = {f.name: f for f in p.decode_setting0(0x8134)}
-        self.assertFalse(flags["UPS function"].is_set)         # clear => enabled
-        self.assertIn("enabled", flags["UPS function"].meaning)
-        self.assertTrue(flags["PowerAssist"].is_set)
-        self.assertFalse(flags["Charge mode"].is_set)          # clear => fixed
-        self.assertIn("Fixed", flags["Charge mode"].meaning)
-        self.assertFalse(flags["Weak AC input"].is_set)
+    def test_setting0_bench_multiplus_ii(self):
+        # 0x8134: 60 Hz, UPS on (bit3 clear), PA on, reduced float off (bit11 clear).
+        flags = {f.bit: f for f in p.decode_setting0(0x8134)}
+        self.assertFalse(flags[3].is_set)                      # clear => enabled
+        self.assertIn("enabled", flags[3].meaning)
+        self.assertTrue(flags[5].is_set)
+        self.assertEqual(flags[11].name, "Reduced float (storage mode)")
+        self.assertFalse(flags[11].is_set)
+        self.assertFalse(flags[14].is_set)
+        self.assertEqual(flags[2].meaning, "60 Hz")
 
-    def test_setting0_unknown_bits_not_interpreted(self):
+    def test_setting0_names_every_bit(self):
+        self.assertEqual([f.bit for f in p.decode_setting0(0)], list(range(16)))
+        self.assertEqual([f.bit for f in p.decode_setting1(0)], list(range(16)))
+
+    def test_setting0_reserved_and_disputed_bits_not_interpreted(self):
         for f in p.decode_setting0(0x8134):
-            if f.bit in (7, 15):
-                self.assertFalse(f.interpret)
-                self.assertFalse(f.confirmed)
+            self.assertEqual(f.interpret, f.bit not in (7, 9, 10, 12))
+
+    def test_only_bench_toggled_bits_confirmed(self):
+        s0 = {f.bit for f in p.decode_setting0(0) if f.confirmed}
+        s1 = {f.bit for f in p.decode_setting1(0) if f.confirmed}
+        self.assertEqual(s0, {3, 5, 14})
+        self.assertEqual(s1, {11, 12})
+
+    def test_setting60_solar_wind_is_bit9(self):
+        # FINDINGS: 16 with Solar & Wind priority off, 528 with it on.
+        off = {f.bit: f.is_set for f in p.decode_setting60(16)}
+        on = {f.bit: f.is_set for f in p.decode_setting60(528)}
+        self.assertTrue(off[p.BIT_LITHIUM] and on[p.BIT_LITHIUM])
+        self.assertFalse(off[9])
+        self.assertTrue(on[9])
+
+    def test_setting_names_fallback(self):
+        self.assertEqual(p.setting_meta(13).name, "Number of slaves")
+        self.assertEqual(p.setting_meta(17).name, "VS on when Udc lower than")
+        self.assertEqual(p.setting_meta(200).name, "Setting 200")
+
+    def test_state_names_match_spec(self):
+        self.assertEqual(sorted(p.STATE_NAMES), [1, 2, 3, 4])
+        self.assertEqual(p.STATE_NAMES[p.SWITCH_OFF], "Off")
 
     def test_setting1_bits(self):
         # bit 11 set, bit 12 clear.
@@ -291,23 +317,31 @@ class TestValidation(unittest.TestCase):
 
 class TestLiFePO4Sequence(unittest.TestCase):
     def test_order_and_values(self):
-        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, 35)
+        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, 35, 0)
         ids = [s.setting_id for s in seq]
-        # Setting 0 first (clear adaptive), then 60,65,72,10,2,3,9, then current.
+        # Setting 0 first (clear reduced float), then 60,65,72,10,2,3,9, then current.
         self.assertEqual(ids, [0, 60, 65, 72, 10, 2, 3, 9, 4])
 
     def test_setting0_read_modify_write_clears_bit11_only(self):
-        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, None)
+        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, None, 0)
         step0 = seq[0]
         self.assertEqual(step0.setting_id, 0)
         # 0x8134 has bit 11 clear already, so value unchanged here...
         self.assertEqual(step0.value, 0x8134)
-        # ...but if adaptive was on (bit 11 set), only bit 11 is cleared.
-        seq2 = p.build_lifepo4_sequence(0x8934, 56.8, 54.0, None)
+        # ...but if reduced float was on (bit 11 set), only bit 11 is cleared.
+        seq2 = p.build_lifepo4_sequence(0x8934, 56.8, 54.0, None, 0)
         self.assertEqual(seq2[0].value, 0x8134)  # 0x8934 & ~0x0800
 
+    def test_setting60_sets_lithium_and_keeps_other_flags(self):
+        # From 0, the result matches VEConfigure's captured write of 16.
+        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, None, 0)
+        self.assertEqual({s.setting_id: s.value for s in seq}[60], 16)
+        # VE.Bus BMS (bit 7) and prefer renewable (bit 9) must survive.
+        seq2 = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, None, 0x0280)
+        self.assertEqual({s.setting_id: s.value for s in seq2}[60], 0x0290)
+
     def test_voltage_scaling_in_sequence(self):
-        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, 35)
+        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, 35, 0)
         by_id = {s.setting_id: s.value for s in seq}
         self.assertEqual(by_id[2], 5680)
         self.assertEqual(by_id[3], 5400)
@@ -315,8 +349,70 @@ class TestLiFePO4Sequence(unittest.TestCase):
         self.assertEqual(by_id[10], 1)
 
     def test_no_current_when_none(self):
-        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, None)
+        seq = p.build_lifepo4_sequence(0x8134, 56.8, 54.0, None, 0)
         self.assertNotIn(4, [s.setting_id for s in seq])
+
+
+class _FakeSerial:
+    """Records writes; serves queued reply bytes."""
+
+    def __init__(self, reply: bytes = b""):
+        self.writes: list[bytes] = []
+        self.reply = reply
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(bytes(data))
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self.reply)
+
+    def read(self, n: int) -> bytes:
+        out, self.reply = self.reply[:n], self.reply[n:]
+        return out
+
+
+def _serial_backend(reply: bytes = b"", cfg=None) -> p.SerialBackend:
+    b = p.SerialBackend.__new__(p.SerialBackend)
+    b.ser = _FakeSerial(reply)
+    b._lock = __import__("threading").Lock()
+    b._healthy = True
+    b._ramvar_info = {}
+    b.POST_CMD_SLEEP = 0
+    b.WRITE_SLEEP = 0
+    b.read_config = lambda: cfg
+    return b
+
+
+class TestSerialStateAndWrites(unittest.TestCase):
+    CFG = p.ConfigInfo(min_current=9.4, max_current=50.0, actual_current=16.0,
+                       switch_register=p.SW_CHARGE | p.SW_INVERT)
+
+    def test_set_state_sends_long_form_with_current_limit(self):
+        b = _serial_backend(cfg=self.CFG)
+        self.assertTrue(b.set_state(p.SWITCH_OFF))
+        self.assertEqual(b.ser.writes,
+                         [p.build_frame(bytes([0xFF, 0x53, 4, 160, 0, 0x01, 0x80]))])
+
+    def test_set_state_refuses_without_limit_or_valid_state(self):
+        self.assertFalse(_serial_backend(cfg=None).set_state(p.SWITCH_ON))
+        self.assertFalse(_serial_backend(cfg=self.CFG).set_state(0))
+        zero = p.ConfigInfo(0.0, 50.0, 0.0, p.SW_CHARGE)
+        b = _serial_backend(cfg=zero)
+        self.assertFalse(b.set_state(p.SWITCH_ON))
+        self.assertEqual(b.ser.writes, [])
+
+    def test_write_ack_ignores_trailing_bytes(self):
+        # 0x88 means "setting written"; the bytes after it are don't-care.
+        reply = bytes([0x05, 0xFF, 0x58, 0x88, 0x12, 0x34, 0x00])
+        r = _serial_backend(reply).write_setting(2, 5680, verify=False)
+        self.assertTrue(r.acked)
+
+    def test_write_reports_access_level_refusal(self):
+        reply = bytes([0x05, 0xFF, 0x58, 0x9B, 0x00, 0x00, 0x00])
+        r = _serial_backend(reply).write_setting(190, 1, verify=False)
+        self.assertFalse(r.acked)
+        self.assertIn("access level", r.message)
 
 
 class TestMockBackend(unittest.TestCase):
@@ -351,6 +447,11 @@ class TestMockBackend(unittest.TestCase):
         r = self.b.write_setting(191, 0xFFFF)
         self.assertFalse(r.acked)   # high IDs don't ACK
         self.assertTrue(r.ok)       # but readback confirms
+
+    def test_set_state_updates_switch_register(self):
+        self.assertTrue(self.b.set_state(p.SWITCH_CHARGER_ONLY))
+        self.assertEqual(self.b.read_config().switch_state_name, "Charger only")
+        self.assertFalse(self.b.set_state(0))
 
     def test_telemetry_changes_over_reads(self):
         reads = [self.b.read_ramvar(5) for _ in range(12)]

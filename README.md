@@ -9,11 +9,12 @@ Also check out [victron-mk3](https://github.com/j9brown/victron-mk3) — a worki
 **[FINDINGS.md](FINDINGS.md)** — Comprehensive protocol reference covering the full VE.Bus MK2/MK3 wire protocol, reverse-engineered from USB packet captures and iterative bench testing. Includes:
 
 - Complete frame format, checksum calculation, and command/response reference
-- Setting 0 and Setting 1 flag register bit maps (UPS, PowerAssist, Weak AC, adaptive charge, dynamic current limiter, wide frequency range)
+- Setting 0, 1 and 60 flag register bit maps (UPS, PowerAssist, Weak AC, reduced float, dynamic current limiter, wide frequency range, lithium, Solar & Wind priority)
 - Charge profile settings and the exact 8-write sequence VEConfigure uses for LiFePO4
 - Grid code / LOM setting behavior and the residual cleanup problem when reverting to "None"
 - Timing, ACK quirks, cross-model differences (MultiPlus vs. Quattro), and practical gotchas
 - Methodology for mapping unknown settings using sweep-and-diff
+- A cross-check against VictronConnect's own VE.Bus driver: names for settings 0–88, every flag bit and RAM variables 0–37, plus alarms, error codes and energy counters (§12)
 
 Find Victron's official (incomplete) protocol documentation here:
 https://www.victronenergy.com/upload/documents/Technical-Information-Interfacing-with-VE-Bus-products-MK2-Protocol-3-14.pdf
@@ -43,9 +44,9 @@ and tests.
 
 ## Key Protocol Corrections
 
-Victron's documentation has several errors. The most critical:
+Victron's documentation is incomplete and some of it is out of date. The most important points:
 
-**Use CommandWriteViaID (0x37), not CommandWriteSetting (0x33) + CommandWriteData (0x34).** The documented two-step write process does not work. The correct write frame is:
+**Use CommandWriteViaID (0x37).** The documented two-step write (CommandWriteSetting 0x33 + CommandWriteData 0x34) did not work in our testing, although VictronConnect uses it, so the cause is open (FINDINGS §13). The write frame that works here is:
 
 ```
 07 FF 58 37 01 [setting_id] [value_lo] [value_hi] [checksum]
@@ -53,9 +54,9 @@ Victron's documentation has several errors. The most critical:
 
 - `07` — length byte
 - `FF` — protocol marker
-- `58` — Winmon slot ('X'; any of 0x57–0x5A works)
+- `58` — Winmon command letter ('X'; replies echo it, see FINDINGS §2)
 - `37` — CommandWriteViaID
-- `01` — flags: RAM + EEPROM (use `0x03` for RAM only)
+- `01` — flags: bit 0 = setting, bit 1 = RAM only (`0x01` = RAM + EEPROM, `0x03` = RAM only)
 - Setting value is little-endian, voltage settings scaled ×100 (e.g., 5600 = 56.00V)
 
 See [FINDINGS.md § Command Reference](FINDINGS.md#4-command-reference) for the full command set including ReadSetting, GetSettingInfo, ReadRAMVar, and State commands.
@@ -101,7 +102,8 @@ python reverse_engineering/ram_sweep.py /dev/ttyUSB0 -o ramvars.csv
 - Verify voltage settings with a multimeter after writing
 - Incorrect charge parameters can damage batteries
 - Never blindly copy flag register values between different models — base values differ between MultiPlus and Quattro
-- Always use read-modify-write when changing individual bits in flag registers (Settings 0 and 1)
+- Always use read-modify-write when changing individual bits in flag registers (Settings 0, 1 and 60)
+- On systems with more than one unit, settings written to address 0 change only that unit; VictronConnect writes every unit (FINDINGS §12.8)
 
 ## Contributing
 
